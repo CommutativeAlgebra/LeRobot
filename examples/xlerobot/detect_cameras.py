@@ -85,8 +85,28 @@ def cv2_destroy_all_safe() -> None:
         pass
 
 
+def to_linux_index(index_or_path: str | int) -> str | int:
+    """Map '/dev/videoN' to int N on Linux so OpenCV uses the V4L2 backend.
+
+    This cv2 build only supports V4L2 capture by index; a string path falls back
+    to the FFmpeg backend, which applies requested width/height unreliably and
+    opens 1920x1080 uncompressed (YUYV). Multiple such streams exceed USB camera
+    bandwidth and fail with VIDIOC_STREAMON 'No space left on device'.
+    """
+    if (
+        platform.system() == "Linux"
+        and isinstance(index_or_path, str)
+        and index_or_path.startswith("/dev/video")
+    ):
+        suffix = index_or_path[len("/dev/video"):]
+        if suffix.isdigit():
+            return int(suffix)
+    return index_or_path
+
+
 def probe_resolution(index_or_path: str | int, width: int, height: int) -> dict[str, Any]:
     """Open device, set requested size, read back properties and one frame."""
+    index_or_path = to_linux_index(index_or_path)
     cap = cv2.VideoCapture(index_or_path)
     if not cap.isOpened():
         return {"opened": False}
@@ -144,6 +164,7 @@ def run_probe_resolutions(cameras: list[dict[str, Any]]) -> None:
 
 
 def run_preview(index_or_path: str | int, width: int | None, height: int | None, seconds: float) -> None:
+    index_or_path = to_linux_index(index_or_path)
     cap = cv2.VideoCapture(index_or_path)
     if not cap.isOpened():
         print(f"Failed to open: {index_or_path!r}")
@@ -232,7 +253,7 @@ def run_live_all(
     ids: list[str | int] = []
     for info in cameras:
         cid = info["id"]
-        cap = cv2.VideoCapture(cid)
+        cap = cv2.VideoCapture(to_linux_index(cid))
         if not cap.isOpened():
             print(f"[live] skip cannot open: {cid!r}")
             continue
