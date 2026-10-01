@@ -3,3 +3,4 @@ data/calibration
 data/recordings
 outputs/
 *.log
+src/lerobot/robots/xlerobot/xlerobot_config.json

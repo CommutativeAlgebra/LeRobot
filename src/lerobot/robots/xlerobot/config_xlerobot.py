@@ -12,13 +12,52 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass, field
+import json
+import logging
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 
 from lerobot.cameras.configs import CameraConfig, Cv2Rotation
 from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
 
 from ..config import RobotConfig
+
+logger = logging.getLogger(__name__)
+
+# Optional per-machine override file (gitignored). Copy xlerobot_config.json.example
+# to xlerobot_config.json next to this module to override config fields without
+# editing tracked source files.
+XLEROBOT_LOCAL_CONFIG_PATH = Path(__file__).with_name("xlerobot_config.json")
+
+
+def apply_xlerobot_local_overrides(cfg, path: Path = XLEROBOT_LOCAL_CONFIG_PATH) -> None:
+    """Override dataclass fields of `cfg` with values from a local JSON file.
+
+    Keys must match existing dataclass fields (`cameras` is not supported; use the
+    `cam_*` fields instead). String values for Path-typed fields are converted
+    (with `~` expansion). No-op if the file does not exist.
+    """
+    if not path.is_file():
+        return
+    try:
+        overrides = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON in {path}: {e}") from e
+    if not isinstance(overrides, dict):
+        raise ValueError(f"{path} must contain a JSON object of field overrides.")
+    valid = {f.name for f in fields(cfg)} - {"cameras"}
+    unknown = sorted(set(overrides) - valid)
+    if unknown:
+        raise ValueError(
+            f"{path}: unknown field(s) {unknown}. Valid fields: {sorted(valid)} "
+            f"('cameras' is built from the cam_* fields at runtime)."
+        )
+    for key, value in overrides.items():
+        current = getattr(cfg, key)
+        if isinstance(current, Path) and value is not None:
+            value = Path(value).expanduser()
+        object.__setattr__(cfg, key, value)
+    logger.info("Applied XLeRobot local overrides from %s: %s", path, sorted(overrides))
 
 
 def make_xlerobot_opencv_cameras(
@@ -130,6 +169,7 @@ class XLerobotConfig(RobotConfig):
     )
 
     def __post_init__(self):
+        apply_xlerobot_local_overrides(self)
         if not self.cameras:
             object.__setattr__(
                 self,
@@ -201,6 +241,7 @@ class XLerobotClientConfig(RobotConfig):
     connect_timeout_s: int = 5
 
     def __post_init__(self):
+        apply_xlerobot_local_overrides(self)
         if not self.cameras:
             object.__setattr__(
                 self,

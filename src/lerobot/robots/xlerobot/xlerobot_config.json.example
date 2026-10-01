@@ -1,0 +1,12 @@
+{
+  "port1": "/dev/ttyACM0",
+  "port2": "/dev/ttyACM1",
+  "calibration_dir": "~/XLeRobot/LeRobot/data/calibration",
+  "cam_left_wrist": 0,
+  "cam_right_wrist": 2,
+  "cam_head": 4,
+  "cam_fps": 30,
+  "cam_width": 640,
+  "cam_height": 480,
+  "record_data_root": "~/XLeRobot/LeRobot/data/recordings"
+}
