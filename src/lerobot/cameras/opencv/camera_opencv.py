@@ -481,7 +481,7 @@ class OpenCVCamera(Camera):
         self.thread = None
         self.stop_event = None
 
-    def async_read(self, timeout_ms: float = 1000.0) -> NDArray[Any]:
+    def async_read(self, timeout_ms: float | None = None) -> NDArray[Any]:
         """
         Reads the latest available frame asynchronously.
 
@@ -491,7 +491,7 @@ class OpenCVCamera(Camera):
 
         Args:
             timeout_ms (float | None): Maximum time in milliseconds to wait for a frame
-                to become available. If None, uses ``config.async_read_timeout_ms`` (default 500 ms).
+                to become available. If None, uses ``config.async_read_timeout_ms``.
 
         Returns:
             np.ndarray: The latest captured frame as a NumPy array in the format
@@ -505,7 +505,8 @@ class OpenCVCamera(Camera):
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
-        timeout_ms = 1000.0
+        if timeout_ms is None:
+            timeout_ms = self.async_read_timeout_ms
 
         if self.thread is None or not self.thread.is_alive():
             self._start_read_thread()

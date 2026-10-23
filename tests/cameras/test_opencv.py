@@ -20,6 +20,7 @@
 # ```
 
 from pathlib import Path
+from unittest.mock import Mock
 
 import numpy as np
 import pytest
@@ -134,14 +135,29 @@ def test_async_read(index_or_path):
             camera.disconnect()  # To stop/join the thread. Otherwise get warnings when the test ends
 
 
-def test_async_read_timeout():
-    config = OpenCVCameraConfig(index_or_path=DEFAULT_PNG_FILE_PATH)
+@pytest.mark.parametrize(
+    ("timeout_ms", "expected_wait_s"),
+    [
+        (None, 0.123),
+        (0, 0.0),
+    ],
+    ids=["configured", "explicit"],
+)
+def test_async_read_timeout(timeout_ms, expected_wait_s):
+    config = OpenCVCameraConfig(index_or_path=DEFAULT_PNG_FILE_PATH, async_read_timeout_ms=123)
     camera = OpenCVCamera(config)
     camera.connect(warmup=False)
 
     try:
+        camera.thread = Mock()
+        camera.thread.is_alive.return_value = True
+        camera.new_frame_event = Mock()
+        camera.new_frame_event.wait.return_value = False
+
         with pytest.raises(TimeoutError):
-            camera.async_read(timeout_ms=0)
+            camera.async_read(timeout_ms=timeout_ms)
+
+        camera.new_frame_event.wait.assert_called_once_with(timeout=expected_wait_s)
     finally:
         if camera.is_connected:
             camera.disconnect()

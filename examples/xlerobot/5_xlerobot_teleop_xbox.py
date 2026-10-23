@@ -8,15 +8,12 @@ PYTHONPATH=src python -m lerobot.robots.xlerobot.xlerobot_host --robot.id=my_xle
 PYTHONPATH=src python -m examples.xlerobot.teleoperate_XBOX
 '''
 
-import time
 import numpy as np
-import math
 import pygame
 
-from lerobot.robots.xlerobot import XLerobotConfig, XLerobot, default_xlerobot_start_pose
-from lerobot.utils.robot_utils import busy_wait
-from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
 from lerobot.model.SO101Robot import SO101Kinematics
+from lerobot.robots.xlerobot import XLerobotConfig, XLerobot, default_xlerobot_start_pose
+from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
 
 # Keymaps (semantic action: controller mapping) - Intuitive human control
 LEFT_KEYMAP = {
@@ -82,14 +79,15 @@ class SimpleHeadControl:
         self.zero_pos = {motor: configured_pose[motor] for motor in HEAD_MOTOR_MAP}
         self.target_positions = self.zero_pos.copy()
 
-    def move_to_zero_position(self, robot):
+    def move_to_zero_position(self, robot, obs=None):
         print(f"[HEAD] Moving to fixed position: {self.zero_pos} ......")
         self.target_positions = self.zero_pos.copy()
-        action = self.p_control_action(robot)
+        if obs is None:
+            obs = robot.get_observation()
+        action = self.p_control_action(obs)
         robot.send_action(action)
 
-    def p_control_action(self, robot):
-        obs = robot.get_observation()
+    def p_control_action(self, obs):
         action = {}
         for motor in self.target_positions:
             current = obs.get(f"{HEAD_MOTOR_MAP[motor]}.pos", 0.0)
@@ -131,12 +129,14 @@ class SimpleTeleopArm:
             + self.zero_pos["elbow_flex"]
         )
 
-    def move_to_zero_position(self, robot):
+    def move_to_zero_position(self, robot, obs=None):
         print(f"[{self.prefix}] Moving to configured start position: {self.zero_pos} ......")
         self.target_positions = self.zero_pos.copy()  # Use copy to avoid reference issues
         self._reset_kinematic_state()
-        
-        action = self.p_control_action(robot)
+
+        if obs is None:
+            obs = robot.get_observation()
+        action = self.p_control_action(obs)
         robot.send_action(action)
 
     def handle_keys(self, key_state):
@@ -202,8 +202,7 @@ class SimpleTeleopArm:
         )
         # print(f"[{self.prefix}] wrist_flex: {self.target_positions['wrist_flex']}")
 
-    def p_control_action(self, robot):
-        obs = robot.get_observation()
+    def p_control_action(self, obs):
         current = {j: obs[f"{self.prefix}_arm_{j}.pos"] for j in self.joint_map}
         action = {}
         for j in self.target_positions:
@@ -367,7 +366,6 @@ def get_base_speed_control(joystick):
 
 
 def main():
-    FPS = 30
     robot_config = XLerobotConfig()
     robot = XLerobot(robot_config)
     try:
@@ -404,9 +402,9 @@ def main():
     head_control = SimpleHeadControl(obs, start_pose=robot_config.start_pose)
 
     # Move both arms and head to the configured start pose.
-    left_arm.move_to_zero_position(robot)
-    right_arm.move_to_zero_position(robot)
-    head_control.move_to_zero_position(robot)
+    left_arm.move_to_zero_position(robot, obs)
+    right_arm.move_to_zero_position(robot, obs)
+    head_control.move_to_zero_position(robot, obs)
 
     try:
         while True:
@@ -421,18 +419,22 @@ def main():
             # Handle global reset for all components
             if global_reset:
                 print("[MAIN] Restoring configured start pose!")
-                left_arm.move_to_zero_position(robot)
-                right_arm.move_to_zero_position(robot)
-                head_control.move_to_zero_position(robot)
+                obs = robot.get_observation()
+                left_arm.move_to_zero_position(robot, obs)
+                right_arm.move_to_zero_position(robot, obs)
+                head_control.move_to_zero_position(robot, obs)
                 continue
 
             # Handle both arms separately and simultaneously
             left_arm.handle_keys(left_key_state)
             right_arm.handle_keys(right_key_state)
 
-            left_action = left_arm.p_control_action(robot)
-            right_action = right_arm.p_control_action(robot)
-            head_action = head_control.p_control_action(robot)
+            # One shared observation keeps arm control and visualization in sync while avoiding
+            # repeated waits for fresh frames from every camera in the same control cycle.
+            obs = robot.get_observation()
+            left_action = left_arm.p_control_action(obs)
+            right_action = right_arm.p_control_action(obs)
+            head_action = head_control.p_control_action(obs)
 
             # Get base action and speed control from controller
             base_action = get_base_action(joystick, robot)
@@ -448,7 +450,6 @@ def main():
             action = {**left_action, **right_action, **head_action, **base_action}
             robot.send_action(action)
 
-            obs = robot.get_observation()
             log_rerun_data(obs, action)
     finally:
         robot.disconnect()
