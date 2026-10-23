@@ -1,4 +1,5 @@
 {
+  "id": "my_xlerobot",
   "port1": "/dev/ttyACM0",
   "port2": "/dev/ttyACM1",
   "calibration_dir": "~/XLeRobot/LeRobot/data/calibration",
