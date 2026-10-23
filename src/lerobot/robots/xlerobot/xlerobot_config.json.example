@@ -8,5 +8,21 @@
   "cam_fps": 30,
   "cam_width": 640,
   "cam_height": 480,
-  "record_data_root": "~/XLeRobot/LeRobot/data/recordings"
+  "record_data_root": "~/XLeRobot/LeRobot/data/recordings",
+  "start_pose": {
+    "left_arm_shoulder_pan": 0.0,
+    "left_arm_shoulder_lift": 0.0,
+    "left_arm_elbow_flex": 0.0,
+    "left_arm_wrist_flex": 0.0,
+    "left_arm_wrist_roll": 0.0,
+    "left_arm_gripper": 90.0,
+    "right_arm_shoulder_pan": 0.0,
+    "right_arm_shoulder_lift": 0.0,
+    "right_arm_elbow_flex": 0.0,
+    "right_arm_wrist_flex": 0.0,
+    "right_arm_wrist_roll": 0.0,
+    "right_arm_gripper": 90.0,
+    "head_motor_1": 0.6055,
+    "head_motor_2": 41.2684
+  }
 }

@@ -24,6 +24,56 @@ from ..config import RobotConfig
 
 logger = logging.getLogger(__name__)
 
+XLEROBOT_POSITION_MOTORS = (
+    "left_arm_shoulder_pan",
+    "left_arm_shoulder_lift",
+    "left_arm_elbow_flex",
+    "left_arm_wrist_flex",
+    "left_arm_wrist_roll",
+    "left_arm_gripper",
+    "right_arm_shoulder_pan",
+    "right_arm_shoulder_lift",
+    "right_arm_elbow_flex",
+    "right_arm_wrist_flex",
+    "right_arm_wrist_roll",
+    "right_arm_gripper",
+    "head_motor_1",
+    "head_motor_2",
+)
+
+
+def default_xlerobot_start_pose() -> dict[str, float]:
+    """Return the default teleoperation start pose in calibrated motor coordinates."""
+    pose = dict.fromkeys(XLEROBOT_POSITION_MOTORS, 0.0)
+    pose["left_arm_gripper"] = 90.0
+    pose["right_arm_gripper"] = 90.0
+    pose["head_motor_1"] = 0.6055
+    pose["head_motor_2"] = 41.2684
+    return pose
+
+
+def validate_xlerobot_start_pose(pose: dict[str, float]) -> dict[str, float]:
+    if not isinstance(pose, dict):
+        raise ValueError("XLerobotConfig.start_pose must be a JSON object.")
+
+    expected = set(XLEROBOT_POSITION_MOTORS)
+    missing = sorted(expected - set(pose))
+    unknown = sorted(set(pose) - expected)
+    if missing or unknown:
+        raise ValueError(
+            "XLerobotConfig.start_pose has invalid motor names: "
+            f"missing={missing}, unknown={unknown}."
+        )
+
+    normalized = {}
+    for motor in XLEROBOT_POSITION_MOTORS:
+        value = pose[motor]
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"XLerobotConfig.start_pose[{motor!r}] must be a number, got {value!r}.")
+        normalized[motor] = float(value)
+    return normalized
+
+
 # Optional per-machine override file (gitignored). Copy xlerobot_config.json.example
 # to xlerobot_config.json next to this module to override config fields without
 # editing tracked source files.
@@ -56,6 +106,11 @@ def apply_xlerobot_local_overrides(cfg, path: Path = XLEROBOT_LOCAL_CONFIG_PATH)
         current = getattr(cfg, key)
         if isinstance(current, Path) and value is not None:
             value = Path(value).expanduser()
+        elif key == "start_pose":
+            if not isinstance(value, dict):
+                raise ValueError(f"{path}: 'start_pose' must be a JSON object.")
+            # Allow a local file to override only the joints that differ from defaults.
+            value = {**current, **value}
         object.__setattr__(cfg, key, value)
     logger.info("Applied XLeRobot local overrides from %s: %s", path, sorted(overrides))
 
@@ -146,6 +201,11 @@ class XLerobotConfig(RobotConfig):
     # Same idea as detect_cameras.py --live-max-width; 0 = no downscale.
     record_preview_max_width: int = 1920
 
+    # Collision-free pose used when teleoperation starts. Values use the same
+    # calibrated coordinate system returned by get_observation(). Base wheels are
+    # intentionally absent because they run in velocity mode and start at 0 velocity.
+    start_pose: dict[str, float] = field(default_factory=default_xlerobot_start_pose)
+
     cameras: dict[str, CameraConfig] = field(default_factory=xlerobot_cameras_config)
 
     # Set to `True` for backward compatibility with previous policies/dataset
@@ -170,6 +230,7 @@ class XLerobotConfig(RobotConfig):
 
     def __post_init__(self):
         apply_xlerobot_local_overrides(self)
+        object.__setattr__(self, "start_pose", validate_xlerobot_start_pose(self.start_pose))
         if not self.cameras:
             object.__setattr__(
                 self,

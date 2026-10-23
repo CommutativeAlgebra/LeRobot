@@ -13,9 +13,9 @@ import numpy as np
 import math
 import pygame
 
-from lerobot.robots.xlerobot import XLerobotConfig, XLerobot
+from lerobot.robots.xlerobot import XLerobotConfig, XLerobot, default_xlerobot_start_pose
 from lerobot.utils.robot_utils import busy_wait
-from lerobot.utils.visualization_utils import _init_rerun, log_rerun_data
+from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
 from lerobot.model.SO101Robot import SO101Kinematics
 
 # Keymaps (semantic action: controller mapping) - Intuitive human control
@@ -30,9 +30,6 @@ LEFT_KEYMAP = {
     'wrist_roll+': 'lb_right', 'wrist_roll-': 'lb_left',
     # Left trigger controls left gripper
     'gripper+': 'left_trigger',
-    # Head motors
-    "head_motor_1+": 'x', "head_motor_1-": 'b',
-    "head_motor_2+": 'a', "head_motor_2-": 'y',
 }
 RIGHT_KEYMAP = {
     # Right stick controls right arm XY (when not pressed)
@@ -79,34 +76,17 @@ HEAD_MOTOR_MAP = {
 }
 
 class SimpleHeadControl:
-    def __init__(self, initial_obs, kp=1):
+    def __init__(self, initial_obs, kp=1, start_pose=None):
         self.kp = kp
-        self.degree_step = 1
-        # Initialize head motor positions
-        self.target_positions = {
-            "head_motor_1": initial_obs.get("head_motor_1.pos", 0.0),
-            "head_motor_2": initial_obs.get("head_motor_2.pos", 0.0),
-        }
-        self.zero_pos = {"head_motor_1": 0.0, "head_motor_2": 0.0}
+        configured_pose = start_pose or default_xlerobot_start_pose()
+        self.zero_pos = {motor: configured_pose[motor] for motor in HEAD_MOTOR_MAP}
+        self.target_positions = self.zero_pos.copy()
 
     def move_to_zero_position(self, robot):
+        print(f"[HEAD] Moving to fixed position: {self.zero_pos} ......")
         self.target_positions = self.zero_pos.copy()
         action = self.p_control_action(robot)
         robot.send_action(action)
-
-    def handle_keys(self, key_state):
-        if key_state.get('head_motor_1+'):
-            self.target_positions["head_motor_1"] += self.degree_step
-            print(f"[HEAD] head_motor_1: {self.target_positions['head_motor_1']}")
-        if key_state.get('head_motor_1-'):
-            self.target_positions["head_motor_1"] -= self.degree_step
-            print(f"[HEAD] head_motor_1: {self.target_positions['head_motor_1']}")
-        if key_state.get('head_motor_2+'):
-            self.target_positions["head_motor_2"] += self.degree_step
-            print(f"[HEAD] head_motor_2: {self.target_positions['head_motor_2']}")
-        if key_state.get('head_motor_2-'):
-            self.target_positions["head_motor_2"] -= self.degree_step
-            print(f"[HEAD] head_motor_2: {self.target_positions['head_motor_2']}")
 
     def p_control_action(self, robot):
         obs = robot.get_observation()
@@ -119,7 +99,7 @@ class SimpleHeadControl:
         return action
 
 class SimpleTeleopArm:
-    def __init__(self, kinematics, joint_map, initial_obs, prefix="left", kp=1):
+    def __init__(self, kinematics, joint_map, initial_obs, prefix="left", kp=1, start_pose=None):
         self.kinematics = kinematics
         self.joint_map = joint_map
         self.prefix = prefix  # To distinguish left and right arm
@@ -133,42 +113,28 @@ class SimpleTeleopArm:
             "wrist_roll": initial_obs[f"{prefix}_arm_wrist_roll.pos"],
             "gripper": initial_obs[f"{prefix}_arm_gripper.pos"],
         }
-        # Set initial x/y to fixed values
-        self.current_x = 0.1629
-        self.current_y = 0.1131
-        self.pitch = 0.0
         # Set the degree step and xy step
         self.degree_step = 2
         self.xy_step = 0.005
-        # Set target positions to zero for P control
-        self.target_positions = {
-            "shoulder_pan": 0.0,
-            "shoulder_lift": 0.0,
-            "elbow_flex": 0.0,
-            "wrist_flex": 0.0,
-            "wrist_roll": 0.0,
-            "gripper": 0.0,
-        }
-        self.zero_pos = {
-            'shoulder_pan': 0.0,
-            'shoulder_lift': 0.0,
-            'elbow_flex': 0.0,
-            'wrist_flex': 0.0,
-            'wrist_roll': 0.0,
-            'gripper': 0.0
-        }
+        configured_pose = start_pose or default_xlerobot_start_pose()
+        self.zero_pos = {joint: configured_pose[motor] for joint, motor in joint_map.items()}
+        self.target_positions = self.zero_pos.copy()
+        self._reset_kinematic_state()
+
+    def _reset_kinematic_state(self):
+        self.current_x, self.current_y = self.kinematics.forward_kinematics(
+            self.zero_pos["shoulder_lift"], self.zero_pos["elbow_flex"]
+        )
+        self.pitch = (
+            self.zero_pos["wrist_flex"]
+            + self.zero_pos["shoulder_lift"]
+            + self.zero_pos["elbow_flex"]
+        )
 
     def move_to_zero_position(self, robot):
-        print(f"[{self.prefix}] Moving to Zero Position: {self.zero_pos} ......")
+        print(f"[{self.prefix}] Moving to configured start position: {self.zero_pos} ......")
         self.target_positions = self.zero_pos.copy()  # Use copy to avoid reference issues
-        
-        # Reset kinematic variables to their initial state
-        self.current_x = 0.1629
-        self.current_y = 0.1131
-        self.pitch = 0.0
-        
-        # Don't let handle_keys recalculate wrist_flex - set it explicitly
-        self.target_positions["wrist_flex"] = 0.0
+        self._reset_kinematic_state()
         
         action = self.p_control_action(robot)
         robot.send_action(action)
@@ -194,7 +160,7 @@ class SimpleTeleopArm:
             self.target_positions["gripper"] = 2
             print(f"[{self.prefix}] gripper: CLOSED")
         else:
-            self.target_positions["gripper"] = 90
+            self.target_positions["gripper"] = self.zero_pos["gripper"]
             print(f"[{self.prefix}] gripper: auto-opening to {self.target_positions['gripper']:.1f}")
         
         if key_state.get('pitch+'):
@@ -413,7 +379,7 @@ def main():
         print(robot)
         return
 
-    _init_rerun(session_name="xlerobot_teleop_xbox")
+    init_rerun(session_name="xlerobot_teleop_xbox")
 
     # Init XBOX controller
     pygame.init()
@@ -429,13 +395,18 @@ def main():
     obs = robot.get_observation()
     kin_left = SO101Kinematics()
     kin_right = SO101Kinematics()
-    left_arm = SimpleTeleopArm(kin_left, LEFT_JOINT_MAP, obs, prefix="left")
-    right_arm = SimpleTeleopArm(kin_right, RIGHT_JOINT_MAP, obs, prefix="right")
-    head_control = SimpleHeadControl(obs)
+    left_arm = SimpleTeleopArm(
+        kin_left, LEFT_JOINT_MAP, obs, prefix="left", start_pose=robot_config.start_pose
+    )
+    right_arm = SimpleTeleopArm(
+        kin_right, RIGHT_JOINT_MAP, obs, prefix="right", start_pose=robot_config.start_pose
+    )
+    head_control = SimpleHeadControl(obs, start_pose=robot_config.start_pose)
 
-    # Move both arms and head to zero position at start
+    # Move both arms and head to the configured start pose.
     left_arm.move_to_zero_position(robot)
     right_arm.move_to_zero_position(robot)
+    head_control.move_to_zero_position(robot)
 
     try:
         while True:
@@ -449,7 +420,7 @@ def main():
             
             # Handle global reset for all components
             if global_reset:
-                print("[MAIN] Global reset triggered!")
+                print("[MAIN] Restoring configured start pose!")
                 left_arm.move_to_zero_position(robot)
                 right_arm.move_to_zero_position(robot)
                 head_control.move_to_zero_position(robot)
@@ -458,7 +429,6 @@ def main():
             # Handle both arms separately and simultaneously
             left_arm.handle_keys(left_key_state)
             right_arm.handle_keys(right_key_state)
-            head_control.handle_keys(left_key_state)  # Head controlled by left arm keymap
 
             left_action = left_arm.p_control_action(robot)
             right_action = right_arm.p_control_action(robot)

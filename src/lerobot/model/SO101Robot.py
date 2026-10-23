@@ -151,8 +151,11 @@ class SO101Kinematics:
         theta2 = joint3_rad - theta2_offset
         
         # Forward kinematics calculations
-        x = l1 * math.cos(theta1) + l2 * math.cos(theta1 + theta2 - math.pi)
-        y = l1 * math.sin(theta1) + l2 * math.sin(theta1 + theta2 - math.pi)
+        # ``inverse_kinematics`` defines theta2 as the angle subtracted from
+        # theta1 for the second link. Keep the same convention here so FK -> IK
+        # round trips preserve the configured shoulder/elbow start pose.
+        x = l1 * math.cos(theta1) + l2 * math.cos(theta1 - theta2)
+        y = l1 * math.sin(theta1) + l2 * math.sin(theta1 - theta2)
         
         return x, y
 
