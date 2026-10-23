@@ -123,6 +123,7 @@ def make_xlerobot_opencv_cameras(
     fps: int = 30,
     width: int = 640,
     height: int = 480,
+    fourcc: str | None = None,
     async_read_timeout_ms: float = 500.0,
 ) -> dict[str, CameraConfig]:
     """Three OpenCV cameras for XLerobot (left wrist, right wrist, head).
@@ -136,6 +137,7 @@ def make_xlerobot_opencv_cameras(
             fps=fps,
             width=width,
             height=height,
+            fourcc=fourcc,
             rotation=Cv2Rotation.NO_ROTATION,
             async_read_timeout_ms=async_read_timeout_ms,
         ),
@@ -144,6 +146,7 @@ def make_xlerobot_opencv_cameras(
             fps=fps,
             width=width,
             height=height,
+            fourcc=fourcc,
             rotation=Cv2Rotation.NO_ROTATION,
             async_read_timeout_ms=async_read_timeout_ms,
         ),
@@ -152,6 +155,7 @@ def make_xlerobot_opencv_cameras(
             fps=fps,
             width=width,
             height=height,
+            fourcc=fourcc,
             rotation=Cv2Rotation.NO_ROTATION,
             async_read_timeout_ms=async_read_timeout_ms,
         ),
@@ -185,6 +189,9 @@ class XLerobotConfig(RobotConfig):
     cam_fps: int = 30
     cam_width: int = 640
     cam_height: int = 480
+    # FOURCC pixel format. "MJPG" strongly advised when several USB cameras share one bus
+    # (uncompressed YUYV saturates USB 2.0 bandwidth and frames start timing out).
+    cam_fourcc: str | None = None
     # OpenCV async_read wait; raise if USB/MSMF is slow (e.g. 200 ms was too tight on Windows).
     cam_async_read_timeout_ms: float = 500.0
 
@@ -242,6 +249,7 @@ class XLerobotConfig(RobotConfig):
                     fps=self.cam_fps,
                     width=self.cam_width,
                     height=self.cam_height,
+                    fourcc=self.cam_fourcc,
                     async_read_timeout_ms=self.cam_async_read_timeout_ms,
                 ),
             )
@@ -294,6 +302,8 @@ class XLerobotClientConfig(RobotConfig):
     cam_fps: int = 30
     cam_width: int = 640
     cam_height: int = 480
+    # FOURCC pixel format. "MJPG" strongly advised when several USB cameras share one bus.
+    cam_fourcc: str | None = None
     cam_async_read_timeout_ms: float = 500.0
 
     cameras: dict[str, CameraConfig] = field(default_factory=xlerobot_cameras_config)
@@ -314,6 +324,7 @@ class XLerobotClientConfig(RobotConfig):
                     fps=self.cam_fps,
                     width=self.cam_width,
                     height=self.cam_height,
+                    fourcc=self.cam_fourcc,
                     async_read_timeout_ms=self.cam_async_read_timeout_ms,
                 ),
             )

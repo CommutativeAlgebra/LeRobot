@@ -8,6 +8,7 @@
   "cam_fps": 30,
   "cam_width": 640,
   "cam_height": 480,
+  "cam_fourcc": "MJPG",
   "record_data_root": "~/XLeRobot/LeRobot/data/recordings",
   "start_pose": {
     "left_arm_shoulder_pan": 0.0,
