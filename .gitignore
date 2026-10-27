@@ -4,3 +4,6 @@ data/recordings
 outputs/
 *.log
 src/lerobot/robots/xlerobot/xlerobot_config.json
+# datasets and recorder scratch output
+data/serve
+dsh/out
