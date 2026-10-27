@@ -442,7 +442,7 @@ def get_joycon_speed_control(joycon):
     return current_base_speed
 
 
-def main():
+def main(*, publish_state: bool = False, state_port: int | None = None, state_fps: int | None = None):
     FPS = 30
     
     # Try to use saved calibration file to avoid recalibrating each time
@@ -462,6 +462,24 @@ def main():
         print(f"[MAIN] Robot config: {robot_config}")
         print(f"[MAIN] Robot: {robot}")
         return
+
+    if publish_state:
+        # Read-only state source for other local processes (e.g. dsh/raw_recorder.py).
+        # Must wrap the robot *after* connect() so the buses are open.
+        from lerobot.robots.xlerobot.state_publisher import RobotStateStream
+
+        try:
+            robot = RobotStateStream(
+                robot,
+                port=state_port if state_port is not None else robot_config.record_state_port,
+                fps=state_fps if state_fps is not None else robot_config.record_state_fps,
+                max_observation_age_s=robot_config.record_state_max_observation_age_s,
+            ).start()
+        except Exception as e:
+            print(f"[MAIN] Failed to start state publisher: {e}")
+            robot.disconnect()
+            return
+        print(f"[MAIN] Read-only state stream: http://127.0.0.1:{robot.port}  ({robot.fps} Hz)")
 
     # _init_rerun(session_name="xlerobot_teleop_joycon")
 
@@ -538,4 +556,12 @@ def main():
         print("Teleoperation ended.")
 
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Joy-Con teleoperation, optional read-only state publisher")
+    parser.add_argument("--publish-state", action="store_true",
+                        help="serve read-only state on 127.0.0.1 (for raw_recorder.py)")
+    parser.add_argument("--state-port", type=int, help="override record_state_port")
+    parser.add_argument("--state-fps", type=int, help="override record_state_fps")
+    args = parser.parse_args()
+    main(publish_state=args.publish_state, state_port=args.state_port, state_fps=args.state_fps)

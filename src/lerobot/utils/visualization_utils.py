@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
 import numbers
 import os
 
@@ -21,6 +22,11 @@ import rerun as rr
 from lerobot.processor import RobotAction, RobotObservation
 
 from .constants import ACTION, ACTION_PREFIX, OBS_PREFIX, OBS_STR
+
+logger = logging.getLogger(__name__)
+
+# 只有真正起得来查看器时才逐帧上报；否则 log_rerun_data 直接返回
+_viewer_available = True
 
 
 def init_rerun(
@@ -41,7 +47,18 @@ def init_rerun(
     if ip and port:
         rr.connect_grpc(url=f"rerun+http://{ip}:{port}/proxy")
     else:
-        rr.spawn(memory_limit=memory_limit)
+        try:
+            rr.spawn(memory_limit=memory_limit)
+        except Exception as e:
+            global _viewer_available
+            _viewer_available = False
+            # 查看器缺失不应中断控制循环：rr.init 已经成功，日志照常采集
+            logger.warning(
+                "Rerun viewer unavailable (%s). Visualization disabled; teleoperation continues. "
+                "Fix: `conda activate lerobot` (rerun lives in envs/lerobot/bin) "
+                "or `pip install rerun-sdk==0.26.2`.",
+                e,
+            )
 
 
 def _is_scalar(x):
@@ -55,6 +72,8 @@ def log_rerun_data(
     action: RobotAction | None = None,
     compress_images: bool = False,
 ) -> None:
+    if not _viewer_available:
+        return
     """
     Logs observation and action data to Rerun for real-time visualization.
 
