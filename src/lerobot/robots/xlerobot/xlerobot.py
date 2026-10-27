@@ -167,10 +167,18 @@ class XLerobot(Robot):
         return self._state_ft
 
     @property
+    def motors_connected(self) -> bool:
+        """Only the serial buses.
+
+        A dropped USB camera must not make the robot look "disconnected": motor
+        commands do not need cameras, and treating the two as one makes a camera
+        blip abort teleoperation.
+        """
+        return self.bus1.is_connected and self.bus2.is_connected
+
+    @property
     def is_connected(self) -> bool:
-        return self.bus1.is_connected and self.bus2.is_connected and all(
-            cam.is_connected for cam in self.cameras.values()
-        )
+        return self.motors_connected and all(cam.is_connected for cam in self.cameras.values())
 
     def connect(self, calibrate: bool = True) -> None:
         if self.is_connected:
@@ -338,8 +346,14 @@ class XLerobot(Robot):
             self.bus2.write("Operating_Mode", name, OperatingMode.VELOCITY.value)
         
         
-        self.bus1.enable_torque()
-        self.bus2.enable_torque()
+        # Torque enable draws current on every servo at once; a marginal supply or
+        # connector can drop a single status packet. Retry a few times before
+        # failing the whole connect, and name the bus: motor IDs repeat across buses.
+        for label, bus in (("bus1 (left arm + head)", self.bus1), ("bus2 (right arm + base)", self.bus2)):
+            try:
+                bus.enable_torque(num_retry=3)
+            except Exception as e:
+                raise RuntimeError(f"enable_torque failed on {label}: {e}") from e
         
 
     def setup_motors(self) -> None:
@@ -523,7 +537,12 @@ class XLerobot(Robot):
             "theta.vel": theta_cmd,
         }
 
-    def get_observation(self) -> dict[str, Any]:
+    def get_state_observation(self) -> dict[str, Any]:
+        """Read motor feedback only, without touching the cameras.
+
+        Split out so the state publisher can poll the buses at its own rate
+        without holding the serial lock for the duration of three camera reads.
+        """
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
@@ -546,13 +565,11 @@ class XLerobot(Robot):
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read state: {dt_ms:.1f}ms")
 
-        # Capture images from cameras
-        camera_obs = self.get_camera_observation()
+        return {**left_arm_state, **right_arm_state, **head_state, **base_vel}
 
-        # Combine all observations
-        obs_dict = {**left_arm_state, **right_arm_state, **head_state, **base_vel, **camera_obs}
-
-        return obs_dict
+    def get_observation(self) -> dict[str, Any]:
+        """Motor feedback plus all camera frames (unchanged public behaviour)."""
+        return {**self.get_state_observation(), **self.get_camera_observation()}
     
     def get_camera_observation(self):
         obs_dict = {}
@@ -577,9 +594,9 @@ class XLerobot(Robot):
         Returns:
             np.ndarray: the action sent to the motors, potentially clipped.
         """
-        if not self.is_connected:
-            raise DeviceNotConnectedError(f"{self} is not connected.")
-        
+        if not self.motors_connected:
+            raise DeviceNotConnectedError(f"{self} motors are not connected.")
+
         left_arm_pos = {k: v for k, v in action.items() if k.startswith("left_arm_") and k.endswith(".pos")}
         right_arm_pos = {k: v for k, v in action.items() if k.startswith("right_arm_") and k.endswith(".pos")}
         head_pos = {k: v for k, v in action.items() if k.startswith("head_") and k.endswith(".pos")}
@@ -636,13 +653,22 @@ class XLerobot(Robot):
         logger.info("Base motors stopped")
 
     def disconnect(self):
-        if not self.is_connected:
-            raise DeviceNotConnectedError(f"{self} is not connected.")
+        # Only the motors matter here: a camera that already dropped must not
+        # block shutdown, otherwise the serial buses would never be released.
+        if not self.motors_connected:
+            raise DeviceNotConnectedError(f"{self} motors are not connected.")
 
-        self.stop_base()
+        try:
+            self.stop_base()
+        except Exception as e:
+            logger.warning(f"stop_base failed during disconnect: {e}")
         self.bus1.disconnect(self.config.disable_torque_on_disconnect)
         self.bus2.disconnect(self.config.disable_torque_on_disconnect)
-        for cam in self.cameras.values():
-            cam.disconnect()
+        for name, cam in self.cameras.items():
+            try:
+                if cam.is_connected:
+                    cam.disconnect()
+            except Exception as e:
+                logger.warning(f"camera '{name}' disconnect failed (ignored): {e}")
 
         logger.info(f"{self} disconnected.")

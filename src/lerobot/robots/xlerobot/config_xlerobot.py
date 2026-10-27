@@ -195,6 +195,12 @@ class XLerobotConfig(RobotConfig):
     # OpenCV async_read wait; raise if USB/MSMF is slow (e.g. 200 ms was too tight on Windows).
     cam_async_read_timeout_ms: float = 500.0
 
+    # Read-only state publisher (src/lerobot/robots/xlerobot/state_publisher.py).
+    # Enabled by `--publish-state` on the teleoperation scripts.
+    record_state_port: int = 8765
+    record_state_fps: int = 30
+    record_state_max_observation_age_s: float = 1.0
+
     # Joy-Con dataset recording (examples/xlerobot/7_xlerobot_teleop_joycon_record.py)
     record_data_root: Path = Path(r"E:\FVL\EmbodiedAI\XLeRobot\LeRobot\data\recordings")  # None -> HF_LEROBOT_HOME at runtime
     record_exp_name: str = "pick_and_place"
