@@ -210,6 +210,84 @@ class StreamSource:
         pass
 
 
+class DirectSource:
+    """同进程直接读机器人，不经过 HTTP。
+
+    给遥操脚本内嵌录制用（如 examples/xlerobot/4_xlerobot_teleop_keyboard.py）：
+    主循环每帧调 update() 把这一帧交进来，Recorder 采样时直接复用，
+    不再重复读串口和相机。
+    """
+
+    def __init__(self, robot, robot_type: str = "xlerobot", stream_id: str = "direct"):
+        self.robot = robot
+        self.schema = {"robot_type": robot_type, "stream_id": stream_id, "protocol_version": 1}
+        self._seq = 0
+        self._latest: Snapshot | None = None
+        self._names: list[str] = []
+        self._actions: list[str] = []
+        self._cameras: dict[str, tuple] = {}
+
+        features = getattr(robot, "observation_features", None) or {}
+        self._names = [k for k in features if k.endswith(".pos") or k.endswith(".vel")]
+        actions = getattr(robot, "action_features", None) or {}
+        self._actions = [k for k in actions if k.endswith(".pos") or k.endswith(".vel")]
+        for name, cam in (getattr(robot, "cameras", None) or {}).items():
+            w = getattr(cam, "width", None) or 640
+            h = getattr(cam, "height", None) or 480
+            self._cameras[name] = (int(h), int(w), 3)
+
+    @property
+    def state_names(self) -> list[str]:
+        return list(self._names)
+
+    @property
+    def action_names(self) -> list[str]:
+        return list(self._actions)
+
+    @property
+    def cameras(self) -> dict[str, tuple]:
+        return dict(self._cameras)
+
+    def update(self, obs: dict, action: dict | None = None,
+               cameras_failed: dict[str, str] | None = None) -> None:
+        """把主循环刚拿到的一帧存起来；Recorder 采样时取用。"""
+        self._seq += 1
+        state = np.asarray([obs.get(k, 0.0) for k in self._names], dtype=np.float32)
+        act_src = action if action is not None else obs
+        act = np.asarray([act_src.get(k, 0.0) for k in self._actions], dtype=np.float32)
+        images = {}
+        for name in self._cameras:
+            img = obs.get(name)
+            if img is not None:
+                images[name] = np.asarray(img, dtype=np.uint8)
+        self._latest = Snapshot(
+            state=state,
+            action=act,
+            images=images,
+            state_age_s=0.0,
+            action_age_s=0.0,
+            sequence=self._seq,
+            t_recv=time.monotonic(),
+            cameras_failed=dict(cameras_failed or {}),
+        )
+
+    def read(self, max_age_s: float = 0.5) -> Snapshot:
+        if self._latest is None:
+            # 首次采样（比如刚 open）主循环还没 update 过：直接读一次
+            try:
+                obs = self.robot.get_observation()
+            except Exception as e:
+                raise SourceError(f"读取机器人失败：{e}") from e
+            self.update(obs)
+        age = time.monotonic() - self._latest.t_recv
+        if age > max_age_s:
+            raise SourceError(f"机器人状态已过期（{age:.2f}s > {max_age_s:.2f}s）")
+        return self._latest
+
+    def close(self) -> None:
+        self._latest = None
+
+
 class FakeSource:
     """合成数据源，用于无硬件自检。数值与真实 schema 对齐。"""
 
@@ -728,6 +806,13 @@ class Recorder:
         self._close_v30_dataset()
 
     # -- 开关 --------------------------------------------------------------
+    def rotate(self) -> None:
+        """保存当前段并立刻开始下一段（自动分段用）。"""
+        if self.writer is not None:
+            self._close(save=True)
+        self.last_stop_t = 0.0          # 跳过冷却，立即开新段
+        self._open()
+
     def toggle(self) -> None:
         if self.writer is None:
             self._open()

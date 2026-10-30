@@ -135,8 +135,58 @@ PYTHONPATH=src $P examples/xlerobot/4_xlerobot_teleop_keyboard.py --publish-stat
 | 夹爪单侧方向 | 左右各自配置 | 同一套 `t/g`、`+/-`，方向由按键定义 |
 | 中止 | Start / Ctrl-C | `b` / Ctrl-C |
 
-> 键盘脚本自带 `--record` 参数，会自己建数据集（旧的那套流程）。
-> **推荐仍然用 `dsh/raw_recorder.py` 采集**：统一格式、能续写、能标记缺相机。
+### 录制（两种方式）
+
+**方式 A：独立录制器（推荐，与手柄完全一致）**
+
+终端 1 起键盘遥操并发布状态，终端 2 用 `dsh/raw_recorder.py`：
+
+```bash
+# 终端 1
+PYTHONPATH=src $P examples/xlerobot/4_xlerobot_teleop_keyboard.py --publish-state
+# 终端 2
+$P dsh/raw_recorder.py --format v30 \
+  --v30-out $PWD/data/serve/local/pick_cube \
+  --repo-id local/pick_cube --task "pick up the cube"
+```
+
+**方式 B：脚本内嵌录制（一个终端搞定）**
+
+键盘脚本的 `--record` 现在**直接调用 `dsh/raw_recorder.py` 的写入器**，可选 raw 或 v3.0：
+
+```bash
+# 写 raw 母版（需再跑 convert_to_v21.py）
+PYTHONPATH=src $P examples/xlerobot/4_xlerobot_teleop_keyboard.py \
+  --record --record-format raw --record-root dsh/out/raw \
+  --task-description "pick up the cube"
+
+# 直接写 LeRobot v3.0（可直接训练）
+PYTHONPATH=src $P examples/xlerobot/4_xlerobot_teleop_keyboard.py \
+  --record --record-format v30 \
+  --record-out $PWD/data/serve/local/pick_cube \
+  --record-repo-id local/pick_cube \
+  --task-description "pick up the cube"
+```
+
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `--record` | 关 | 开启内嵌录制 |
+| `--record-format` | `raw` | `raw` = npz+JPEG 母版；`v30` = 直接写数据集 |
+| `--record-root` | `dsh/out/raw` | raw 模式输出根目录 |
+| `--record-out` | — | v30 模式数据集目录（**必填**） |
+| `--record-repo-id` | `local/<目录名>` | v30 的 repo_id |
+| `--task-description` | `My task description` | 任务描述 → 训练 prompt，**务必改写** |
+| `--episode-time-sec` | **0** | 自动分段间隔（秒）。`0` = 不切，用空格手动控制；>0 时到点会**保存当前段并立即开下一段**（不会停止录制，但任务会被切在任意位置） |
+
+**录制中的按键**
+
+| 键 | 作用 |
+|---|---|
+| `空格` | 开始 / 结束一段（结束即保存，≥15 帧才保留） |
+| `Backspace` | 丢弃当前段 |
+
+> 启动时会自动开始第一段。
+> 内嵌录制复用同一套写入器，所以**格式、12 维裁剪、相机缺失标记都与独立录制器一致**。
 
 ---
 

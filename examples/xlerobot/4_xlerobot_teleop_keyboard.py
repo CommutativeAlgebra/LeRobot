@@ -16,17 +16,21 @@
 # Remote (robot host on another PC):
 # python .\examples\xlerobot\4_xlerobot_teleop_keyboard.py --mode client --remote-ip 192.168.1.123
 
-# With dataset recording:
+# With recording (raw layer):
+# python examples/xlerobot/4_xlerobot_teleop_keyboard.py --record --record-format raw \
+#     --record-root dsh/out/raw --task-description "pick up the cube"
+# With recording (LeRobot v3.0 dataset):
+# python examples/xlerobot/4_xlerobot_teleop_keyboard.py --record --record-format v30 \
+#     --record-out data/serve/local/pick_cube --task-description "pick up the cube"
+# Old style (kept for reference):
 # python .\examples\xlerobot\4_xlerobot_teleop_keyboard.py --mode client --remote-ip 192.168.1.123 --record --hf-repo-id myuser/my_dataset --task-description "Pick and place task"
 # '''
 
 import signal
 import time
 import argparse
-import shutil
 import sys
 from pathlib import Path
-from typing import cast
 import numpy as np
 import math
 
@@ -38,10 +42,6 @@ from lerobot.utils.visualization_utils import init_rerun, log_rerun_data
 from lerobot.model.SO101Robot import SO101Kinematics
 from lerobot.teleoperators.keyboard.teleop_keyboard import KeyboardTeleop, KeyboardTeleopConfig
 
-# Add imports for dataset recording
-from lerobot.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.datasets.utils import hw_to_dataset_features, build_dataset_frame
-from lerobot.utils.constants import ACTION, HF_LEROBOT_HOME, OBS_STR
 
 # Keymaps (semantic action: key)
 GRIPPER_MIN = 0.0      # 实测：0 = 夹紧
@@ -473,22 +473,24 @@ def main():
     parser.add_argument("--fps", type=int, default=50)
     # Add recording options
     parser.add_argument("--record", action="store_true", help="Enable dataset recording")
-    parser.add_argument("--hf-repo-id", default="<hf_username>/<dataset_repo_id>", help="HuggingFace repo ID for dataset")
-    parser.add_argument(
-        "--dataset-root",
-        default=None,
-        help=(
-            "Optional output directory for the dataset (full path). "
-            "If omitted, defaults to HF_LEROBOT_HOME/<hf-repo-id>."
-        ),
-    )
     parser.add_argument(
         "--overwrite",
         action="store_true",
         help="If the dataset directory already exists, delete it and recreate without prompting.",
     )
-    parser.add_argument("--task-description", default="My task description", help="Task description for dataset")
-    parser.add_argument("--episode-time-sec", type=int, default=30, help="Time per episode in seconds")
+    parser.add_argument("--task-description", default="My task description",
+                        help="任务描述，写进数据集并作为训练 prompt")
+    parser.add_argument("--record-format", choices=("raw", "v30"), default="raw",
+                        help="raw = npz+JPEG 母版（需再转换）；v30 = 直接写 LeRobot v3.0 数据集")
+    parser.add_argument("--record-root", default="dsh/out/raw",
+                        help="raw 模式的输出根目录")
+    parser.add_argument("--record-out", default=None,
+                        help="v30 模式的数据集目录（如 data/serve/local/pick_cube）")
+    parser.add_argument("--record-repo-id", default=None,
+                        help="v30 模式的 repo_id（默认 local/<目录名>）")
+    parser.add_argument("--episode-time-sec", type=int, default=0,
+                        help="自动分段间隔（秒）；0 = 不自动切，用空格手动控制。"
+                             "注意：>0 时到点会保存当前段并立即开始下一段，不会停止录制")
     parser.add_argument("--publish-state", action="store_true",
                         help="只读状态发布到 127.0.0.1（供 dsh/raw_recorder.py 采集），仅 local 模式")
     parser.add_argument("--state-port", type=int, help="覆盖 record_state_port")
@@ -557,81 +559,38 @@ def main():
     left_arm.move_to_zero_position(robot)
     right_arm.move_to_zero_position(robot)
 
-    # Initialize dataset recording if enabled
-    dataset = None
-    episode_start_time = 0.0
+    # 录制：复用 dsh/raw_recorder.py 的写入器（raw 或 v3.0），不再另建一套数据集
+    recorder = None
+    record_source = None
+    segment_start = 0.0
     if args.record:
-        def _derive_default_dataset_root(repo_id: str) -> Path:
-            return HF_LEROBOT_HOME / repo_id
+        if args.record_format == "v30" and not args.record_out:
+            raise SystemExit("--record-format v30 需要同时给 --record-out <数据集目录>")
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "dsh"))
+        from raw_recorder import DirectSource, Recorder
 
-        def _repo_id_with_suffix(repo_id: str, suffix: str) -> str:
-            parts = repo_id.split("/")
-            parts[-1] = f"{parts[-1]}{suffix}"
-            return "/".join(parts)
-
-        def _resolve_recording_location() -> tuple[str, Path, str | Path | None]:
-            """Return (repo_id, dataset_dir, root_arg_for_create)."""
-            if args.dataset_root:
-                dataset_dir = Path(args.dataset_root).expanduser()
-                repo_id = args.hf_repo_id
-                root_arg = dataset_dir
-            else:
-                repo_id = args.hf_repo_id
-                dataset_dir = _derive_default_dataset_root(repo_id)
-                root_arg = None
-
-            if not dataset_dir.exists():
-                return repo_id, dataset_dir, root_arg
-
-            if args.overwrite:
-                shutil.rmtree(dataset_dir)
-                return repo_id, dataset_dir, root_arg
-
-            if not sys.stdin.isatty():
-                raise FileExistsError(
-                    f"Dataset directory already exists: {dataset_dir}. "
-                    "Re-run with --overwrite, or pick a different --dataset-root / --hf-repo-id."
-                )
-
-            print(f"[RECORD] Dataset directory already exists: {dataset_dir}")
-            choice = input("[RECORD] Choose: (o)verwrite / (n)ew / (q)uit [n]: ").strip().lower() or "n"
-            if choice in {"o", "overwrite", "y", "yes"}:
-                shutil.rmtree(dataset_dir)
-                return repo_id, dataset_dir, root_arg
-            if choice in {"q", "quit"}:
-                raise SystemExit("[RECORD] Aborted by user.")
-
-            # New dataset
-            suffix = "_" + time.strftime("%Y%m%d_%H%M%S")
-            if args.dataset_root:
-                new_dataset_dir = dataset_dir.with_name(dataset_dir.name + suffix)
-                print(f"[RECORD] Using new dataset directory: {new_dataset_dir}")
-                return repo_id, new_dataset_dir, new_dataset_dir
-            else:
-                new_repo_id = _repo_id_with_suffix(repo_id, suffix)
-                new_dataset_dir = _derive_default_dataset_root(new_repo_id)
-                print(f"[RECORD] Using new repo_id: {new_repo_id}")
-                print(f"[RECORD] New dataset directory: {new_dataset_dir}")
-                return new_repo_id, new_dataset_dir, None
-
-        resolved_repo_id, resolved_dataset_dir, resolved_root_arg = _resolve_recording_location()
-
-        features = {}
-        features.update(hw_to_dataset_features(robot.observation_features, OBS_STR, use_video=True))
-        features.update(
-            hw_to_dataset_features(cast(dict[str, type | tuple], robot.action_features), ACTION, use_video=True)
-        )
-        dataset = LeRobotDataset.create(
-            repo_id=resolved_repo_id,
+        record_source = DirectSource(robot)
+        rec_args = argparse.Namespace(
+            source="direct",
+            format=args.record_format,
+            root=args.record_root,
+            v30_out=args.record_out,
+            repo_id=args.record_repo_id,
+            task=args.task_description,
             fps=FPS,
-            features=features,
-            root=resolved_root_arg,
-            use_videos=True,
-            robot_type=robot.robot_type,
+            max_state_age_s=0.5,
+            min_frames=15,
+            cooldown_s=0.0,
+            overwrite=args.overwrite,
+            verbose=False,
+            vcodec="h264",
         )
-        print(f"[MAIN] Dataset recording enabled. Repo: {resolved_repo_id}")
-        print(f"[MAIN] Dataset directory: {dataset.root}")
-        episode_start_time = time.time()
+        recorder = Recorder(rec_args, record_source)
+        target = recorder.v30_root if args.record_format == "v30" else recorder.session
+        print(f"[MAIN] 录制输出（{args.record_format}）：{target}")
+        print("[MAIN] 空格 = 开始/结束一段，Backspace = 丢弃当前段")
+        recorder.toggle()
+        segment_start = time.monotonic()
 
     # Ctrl-C 只置标志：直接抛异常可能打断串口事务，让 SDK 的 is_using 卡住
     stop_requested = {"flag": False}
@@ -644,6 +603,7 @@ def main():
     signal.signal(signal.SIGINT, _on_sigint)
 
     aborted = False
+    prev_keys: set[str] = set()
     try:
         while True:
             if stop_requested["flag"]:
@@ -707,19 +667,27 @@ def main():
             # print(f"[MAIN] Observation: {obs}")
             log_rerun_data(obs, action)
 
-            # Record data if enabled
-            if args.record and dataset is not None:
-                obs_frame = build_dataset_frame(dataset.features, obs, prefix=OBS_STR)
-                action_frame = build_dataset_frame(dataset.features, action, prefix=ACTION)
-                frame = {**obs_frame, **action_frame, "task": args.task_description}
-                dataset.add_frame(frame)
+            # 录制：把这一帧交给内嵌录制器
+            if recorder is not None:
+                new_keys = pressed_keys - prev_keys
+                if "space" in new_keys:
+                    print("[MAIN] 录制开关")
+                    recorder.toggle()
+                    segment_start = time.monotonic()
+                if "backspace" in new_keys:
+                    print("[MAIN] 丢弃当前段")
+                    recorder.discard()
+                    segment_start = time.monotonic()
+                prev_keys = set(pressed_keys)
 
-                # Check if episode time exceeded
-                current_time = time.time()
-                if current_time - episode_start_time >= args.episode_time_sec:
-                    dataset.save_episode()
-                    print(f"[MAIN] Episode saved")
-                    episode_start_time = current_time
+                record_source.update(obs, action)
+                recorder.tick()
+
+                if (args.episode_time_sec > 0 and recorder.writer is not None
+                        and time.monotonic() - segment_start >= args.episode_time_sec):
+                    print("[MAIN] 到达分段时长，保存并开始下一段")
+                    recorder.rotate()
+                    segment_start = time.monotonic()
 
             # busy_wait(1.0 / FPS)
     finally:
@@ -729,12 +697,10 @@ def main():
             except Exception as e:
                 print(f"[MAIN] Reset before exit failed: {e}")
         release_serial_ports(robot)
-        # Save any remaining episode data
-        if args.record and dataset is not None and dataset.episode_buffer is not None:
-            if dataset.episode_buffer.get("size", 0) > 0:
-                dataset.save_episode()
-                print(f"[MAIN] Final episode saved")
-            dataset.finalize()
+        if recorder is not None:
+            if recorder.writer is not None:
+                recorder._close(save=True)
+            recorder.close()
         robot.disconnect()
         keyboard.disconnect()
         print("Teleoperation ended.")
