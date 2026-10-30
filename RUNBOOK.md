@@ -65,6 +65,81 @@ PYTHONPATH=src $P examples/xlerobot/5_xlerobot_teleop_xbox.py --publish-state
 
 ---
 
+## 一·附、键盘遥操（没有手柄时用）
+
+```bash
+cd ~/xhz/XLeRobot_wmf/LeRobot
+P=~/miniconda3/envs/lerobot/bin/python
+PYTHONPATH=src $P examples/xlerobot/4_xlerobot_teleop_keyboard.py --publish-state
+```
+
+`--publish-state` 会同样把只读状态发布到 `127.0.0.1:8765`，所以**录制器完全不用改**，照常用
+`dsh/raw_recorder.py` 采集。
+
+### 键位
+
+**左臂**
+
+| 键 | 动作 |
+|---|---|
+| `w` `s` `a` `d` | 左臂 X/Y 平面移动 |
+| `q` / `e` | `shoulder_pan` −/+ |
+| `r` / `f` | `wrist_roll` +/− |
+| `z` / `x` | `pitch` +/− |
+| `t` / `g` | 夹爪 **张开 / 夹紧**（步进 3，夹在 0~100） |
+| `c` | 左臂回 `start_pose`（继续遥操） |
+| `y` | 左臂矩形轨迹（测试用） |
+
+**右臂**（小键盘）
+
+| 键 | 动作 |
+|---|---|
+| `8` `2` `4` `6` | 右臂 X/Y 平面移动 |
+| `7` / `9` | `shoulder_pan` −/+ |
+| `/` / `*` | `wrist_roll` +/− |
+| `1` / `3` | `pitch` +/− |
+| `+` / `-` | 夹爪 **张开 / 夹紧** |
+| `0` | 右臂回 `start_pose` |
+
+**头部**
+
+| 键 | 动作 |
+|---|---|
+| `<` / `>` | `head_motor_1` +/− |
+| `,` / `.` | `head_motor_2` +/− |
+| `?` | 头部回 `start_pose` |
+
+**底盘**
+
+| 键 | 动作 |
+|---|---|
+| `i` / `k` | 前进 / 后退 |
+| `j` / `l` | 左移 / 右移 |
+| `u` / `o` | 左转 / 右转 |
+| `n` / `m` | 速度档 +1 / −1（3 档） |
+
+### 中止（与手柄一致：先复位再退出）
+
+| 键 | 行为 |
+|---|---|
+| **`b`** | 中止：底盘锁零 → 双臂 + 头回 `start_pose`（约 2 秒）→ 退出进程 |
+| **Ctrl-C** | 同上 |
+
+> 手柄那边是 **Start**；键盘这边是 `b`（来自 `config.teleop_keys["quit"]`）。
+
+### 和手柄的差异
+
+| 项 | 手柄 | 键盘 |
+|---|---|---|
+| 夹爪 | 模拟量，连续 0~100 | **步进**，每帧 ±3，夹在 0~100 |
+| 夹爪单侧方向 | 左右各自配置 | 同一套 `t/g`、`+/-`，方向由按键定义 |
+| 中止 | Start / Ctrl-C | `b` / Ctrl-C |
+
+> 键盘脚本自带 `--record` 参数，会自己建数据集（旧的那套流程）。
+> **推荐仍然用 `dsh/raw_recorder.py` 采集**：统一格式、能续写、能标记缺相机。
+
+---
+
 ## 二、启动录制器（终端 2）
 
 先探活（不录制）：

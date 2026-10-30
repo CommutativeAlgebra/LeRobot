@@ -20,6 +20,7 @@
 # python .\examples\xlerobot\4_xlerobot_teleop_keyboard.py --mode client --remote-ip 192.168.1.123 --record --hf-repo-id myuser/my_dataset --task-description "Pick and place task"
 # '''
 
+import signal
 import time
 import argparse
 import shutil
@@ -43,6 +44,58 @@ from lerobot.datasets.utils import hw_to_dataset_features, build_dataset_frame
 from lerobot.utils.constants import ACTION, HF_LEROBOT_HOME, OBS_STR
 
 # Keymaps (semantic action: key)
+GRIPPER_MIN = 0.0      # 实测：0 = 夹紧
+GRIPPER_MAX = 100.0    # 实测：100 = 张开
+
+
+def release_serial_ports(robot) -> int:
+    """清掉 Feetech SDK 里可能卡住的 is_using 标志（Ctrl-C 打断串口事务会置位）。"""
+    cleared = 0
+    for name in ("bus1", "bus2"):
+        handler = getattr(getattr(robot, name, None), "port_handler", None)
+        if handler is not None and getattr(handler, "is_using", False):
+            handler.is_using = False
+            cleared += 1
+            print(f"[MAIN] Cleared stale port-busy flag on {name}")
+    return cleared
+
+
+def return_to_start_pose(robot, parts, duration_s: float = 2.0, fps: int = 30) -> None:
+    """中止流程：把双臂和头逐帧送回起始姿态，底盘保持静止。"""
+    print("[MAIN] Abort: returning to the start pose ...")
+    release_serial_ports(robot)
+    try:
+        robot.stop_base()
+    except Exception as e:
+        release_serial_ports(robot)
+        print(f"[MAIN] stop_base failed (ignored): {e}")
+
+    for part in parts:
+        part.target_positions = part.zero_pos.copy()
+
+    deadline = time.monotonic() + max(0.2, duration_s)
+    failed_writes = 0
+    while time.monotonic() < deadline:
+        action = {}
+        for part in parts:
+            action.update(part.p_control_action(robot))
+        for name in getattr(robot, "base_motors", []) or []:
+            action[f"{name}.vel"] = 0.0
+        try:
+            robot.send_action(action)
+            failed_writes = 0
+        except Exception as e:
+            failed_writes += 1
+            release_serial_ports(robot)
+            if failed_writes == 1:
+                print(f"[MAIN] Reset write failed ({e}); retrying after clearing port flag")
+            if failed_writes >= 10:
+                print(f"[MAIN] Reset aborted: {failed_writes} consecutive failed writes")
+                break
+        time.sleep(1.0 / fps)
+    print("[MAIN] Start pose reached; exiting.")
+
+
 LEFT_KEYMAP = {
     'shoulder_pan+': 'q', 'shoulder_pan-': 'e',
     'wrist_roll+': 'r', 'wrist_roll-': 'f',
@@ -347,12 +400,15 @@ class SimpleTeleopArm:
         if key_state.get('wrist_roll-'):
             self.target_positions["wrist_roll"] -= self.degree_step
             print(f"[{self.prefix}] wrist_roll: {self.target_positions['wrist_roll']}")
+        # 夹爪：0 = 夹紧，100 = 张开（实测）；步进加减并夹在量程内
         if key_state.get('gripper+'):
-            self.target_positions["gripper"] += self.degree_step
-            print(f"[{self.prefix}] gripper: {self.target_positions['gripper']}")
+            self.target_positions["gripper"] = min(
+                GRIPPER_MAX, self.target_positions["gripper"] + self.degree_step)
+            print(f"[{self.prefix}] gripper: {self.target_positions['gripper']:.0f}（张开方向）")
         if key_state.get('gripper-'):
-            self.target_positions["gripper"] -= self.degree_step
-            print(f"[{self.prefix}] gripper: {self.target_positions['gripper']}")
+            self.target_positions["gripper"] = max(
+                GRIPPER_MIN, self.target_positions["gripper"] - self.degree_step)
+            print(f"[{self.prefix}] gripper: {self.target_positions['gripper']:.0f}（夹紧方向）")
         if key_state.get('pitch+'):
             self.pitch += self.degree_step
             print(f"[{self.prefix}] pitch: {self.pitch}")
@@ -433,6 +489,10 @@ def main():
     )
     parser.add_argument("--task-description", default="My task description", help="Task description for dataset")
     parser.add_argument("--episode-time-sec", type=int, default=30, help="Time per episode in seconds")
+    parser.add_argument("--publish-state", action="store_true",
+                        help="只读状态发布到 127.0.0.1（供 dsh/raw_recorder.py 采集），仅 local 模式")
+    parser.add_argument("--state-port", type=int, help="覆盖 record_state_port")
+    parser.add_argument("--state-fps", type=int, help="覆盖 record_state_fps")
     args = parser.parse_args()
 
     # Teleop parameters
@@ -459,6 +519,25 @@ def main():
         print(robot)
         return
         
+    if args.publish_state:
+        if args.mode != "local":
+            print("[MAIN] --publish-state 只支持 local 模式（client 模式走 ZMQ），已忽略")
+        else:
+            from lerobot.robots.xlerobot.state_publisher import RobotStateStream
+
+            try:
+                robot = RobotStateStream(
+                    robot,
+                    port=args.state_port if args.state_port is not None else robot_config.record_state_port,
+                    fps=args.state_fps if args.state_fps is not None else robot_config.record_state_fps,
+                    max_observation_age_s=robot_config.record_state_max_observation_age_s,
+                ).start()
+                print(f"[MAIN] Read-only state stream: http://127.0.0.1:{robot.port}  ({robot.fps} Hz)")
+            except Exception as e:
+                print(f"[MAIN] Failed to start state publisher: {e}")
+                robot.disconnect()
+                return
+
     init_rerun(session_name="xlerobot_teleop_v2")
 
     #Init the keyboard instance
@@ -554,9 +633,31 @@ def main():
         print(f"[MAIN] Dataset directory: {dataset.root}")
         episode_start_time = time.time()
 
+    # Ctrl-C 只置标志：直接抛异常可能打断串口事务，让 SDK 的 is_using 卡住
+    stop_requested = {"flag": False}
+
+    def _on_sigint(_signum, _frame):
+        if not stop_requested["flag"]:
+            print("\n[MAIN] Ctrl-C received: returning to start pose, then exiting.")
+        stop_requested["flag"] = True
+
+    signal.signal(signal.SIGINT, _on_sigint)
+
+    aborted = False
     try:
         while True:
+            if stop_requested["flag"]:
+                aborted = True
+                break
             pressed_keys = set(keyboard.get_action().keys())
+
+            # 中止键（默认 b，来自 config.teleop_keys["quit"]）：先复位再退出
+            quit_key = (getattr(robot_config, "teleop_keys", None) or {}).get("quit", "b")
+            if quit_key in pressed_keys:
+                print(f"[MAIN] Quit key '{quit_key}' pressed: returning to start pose, then exiting.")
+                aborted = True
+                break
+
             left_key_state = {action: (key in pressed_keys) for action, key in LEFT_KEYMAP.items()}
             right_key_state = {action: (key in pressed_keys) for action, key in RIGHT_KEYMAP.items()}
 
@@ -622,6 +723,12 @@ def main():
 
             # busy_wait(1.0 / FPS)
     finally:
+        if aborted:
+            try:
+                return_to_start_pose(robot, [left_arm, right_arm, head_control], fps=FPS)
+            except Exception as e:
+                print(f"[MAIN] Reset before exit failed: {e}")
+        release_serial_ports(robot)
         # Save any remaining episode data
         if args.record and dataset is not None and dataset.episode_buffer is not None:
             if dataset.episode_buffer.get("size", 0) > 0:
