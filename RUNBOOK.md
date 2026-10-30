@@ -42,16 +42,26 @@ PYTHONPATH=src $P examples/xlerobot/5_xlerobot_teleop_xbox.py --publish-state
 | 左摇杆 ↑↓←→ | 左臂在 XY 平面移动（IK 解算） |
 | **按住**左摇杆 + ←→ | 左臂 `shoulder_pan` |
 | **按住 LB** + 左摇杆 | 左臂 `pitch`（上下）/ `wrist_roll`（左右） |
-| 左扳机 LT | 左夹爪（⚠️ 当前几乎无效，见"已知问题"） |
+| 左扳机 LT | 左夹爪：松开 = 0（夹紧），按到底 = 100（张开） |
 | 右摇杆 / RS / RB / RT | 右臂，与左侧对称 |
 | 十字键 ↑ | **后退**（反的） |
 | 十字键 ↓ | **前进** |
 | 十字键 ←→ | 左转 / 右转 |
 | 单按 LB / RB | 底盘速度档 −1 / +1（1~3 档） |
-| Back | 双臂 + 头部回到 `start_pose` |
+| Back | 双臂 + 头部回到 `start_pose`（继续遥操） |
+| **Start** | **中止：先复位到 `start_pose`，再退出进程** |
+| **Ctrl-C** | 同 Start（先复位再退出） |
 | A / B / X / Y | 未使用 |
 
 > ⚠️ LB 有双重职责：按住推摇杆 = 调 pitch，单独按 = 降底盘档位。用 LB 调俯仰时会顺带把底盘速度压到最低档。
+
+> **中止 vs Back 的区别**：Back 只复位、继续遥操；Start / Ctrl-C 会复位后**退出进程**（约 2 秒平滑回位，复位期间底盘锁零）。
+>
+> ⚠️ **录制中中止前，先按 `o` 结束当前段**，否则复位的那 2 秒动作会被录进数据。
+>
+> 中止时若看到 `[TxRxResult] Port is in use!`，说明 Ctrl-C 打断了一次串口事务，
+> 使 SDK 的 `is_using` 卡在 True。现在已经自动清除（`release_serial_ports()`），
+> 并且 Ctrl-C 改成**只置标志**、不再抛异常，从源头避免打断串口读写。
 
 ---
 

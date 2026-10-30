@@ -8,6 +8,9 @@ PYTHONPATH=src python -m lerobot.robots.xlerobot.xlerobot_host --robot.id=my_xle
 PYTHONPATH=src python -m examples.xlerobot.teleoperate_XBOX
 '''
 
+import signal
+import time
+
 import numpy as np
 import pygame
 
@@ -49,6 +52,7 @@ BASE_KEYMAP = {
 
 # Global reset key for all components
 RESET_KEY = 'back'
+ABORT_BUTTON = 7          # Start：中止（先复位再退出）
 
 LEFT_JOINT_MAP = {
     "shoulder_pan": "left_arm_shoulder_pan",
@@ -245,6 +249,69 @@ def trigger_value(axes, idx: int) -> float:
     if lo < -0.05:                      # 确认是 -1~1 量程
         value = (value + 1.0) / 2.0
     return max(0.0, min(1.0, value))
+
+
+def release_serial_ports(robot) -> int:
+    """清掉 Feetech SDK 里可能卡住的 is_using 标志。
+
+    Ctrl-C 若正好打断一次 txRxPacket，SDK 的 PortHandler.is_using 会停在 True，
+    之后所有读写都返回 COMM_PORT_BUSY（"Port is in use!"）。
+    """
+    cleared = 0
+    for name in ("bus1", "bus2"):
+        bus = getattr(robot, name, None)
+        handler = getattr(bus, "port_handler", None)
+        if handler is not None and getattr(handler, "is_using", False):
+            handler.is_using = False
+            cleared += 1
+            print(f"[MAIN] Cleared stale port-busy flag on {name}")
+    return cleared
+
+
+def return_to_start_pose(robot, left_arm, right_arm, head_control,
+                         duration_s: float = 2.0, fps: int = 30) -> None:
+    """中止流程：把双臂和头平滑送回起始姿态，底盘保持静止。
+
+    逐帧发 P 控制而不是一次性跳到目标，避免复位时甩臂；
+    复位过程中再按 Ctrl-C 也会继续走完。
+    """
+    print("[MAIN] Abort: returning to the start pose ...")
+    release_serial_ports(robot)
+    try:
+        robot.stop_base()
+    except Exception as e:
+        release_serial_ports(robot)
+        print(f"[MAIN] stop_base failed (ignored): {e}")
+
+    parts = [left_arm, right_arm, head_control]
+    for part in parts:
+        part.target_positions = part.zero_pos.copy()
+
+    deadline = time.monotonic() + max(0.2, duration_s)
+    failed_writes = 0
+    while time.monotonic() < deadline:
+        try:
+            obs = robot.get_observation()
+        except KeyboardInterrupt:
+            continue                        # 复位期间不响应第二次 Ctrl-C
+        action = {}
+        for part in parts:
+            action.update(part.p_control_action(obs))
+        for name in getattr(robot, "base_motors", []) or []:
+            action[f"{name}.vel"] = 0.0     # 底盘停住
+        try:
+            robot.send_action(action)
+            failed_writes = 0
+        except Exception as e:
+            failed_writes += 1
+            release_serial_ports(robot)
+            if failed_writes == 1:
+                print(f"[MAIN] Reset write failed ({e}); retrying after clearing port flag")
+            if failed_writes >= 10:
+                print(f"[MAIN] Reset aborted: {failed_writes} consecutive failed writes")
+                break
+        time.sleep(1.0 / fps)
+    print("[MAIN] Start pose reached; exiting.")
 
 
 # --- XBOX Controller Mapping ---
@@ -481,8 +548,23 @@ def main(*, publish_state: bool = False, state_port: int | None = None, state_fp
     right_arm.move_to_zero_position(robot, obs)
     head_control.move_to_zero_position(robot, obs)
 
+    # Ctrl-C 只置标志：直接抛 KeyboardInterrupt 可能正好打断一次串口事务，
+    # 让 SDK 的 is_using 卡住，之后复位写不进去。
+    stop_requested = {"flag": False}
+
+    def _on_sigint(_signum, _frame):
+        if not stop_requested["flag"]:
+            print("\n[MAIN] Ctrl-C received: returning to start pose, then exiting.")
+        stop_requested["flag"] = True
+
+    signal.signal(signal.SIGINT, _on_sigint)
+
+    aborted = False
     try:
         while True:
+            if stop_requested["flag"]:
+                aborted = True
+                break
             pygame.event.pump()
             left_key_state = get_xbox_key_state(joystick, LEFT_KEYMAP)
             right_key_state = get_xbox_key_state(joystick, RIGHT_KEYMAP)
@@ -490,6 +572,11 @@ def main(*, publish_state: bool = False, state_port: int | None = None, state_fp
             # Check for global reset (back button)
             buttons = [joystick.get_button(i) for i in range(joystick.get_numbuttons())]
             global_reset = bool(buttons[6]) if len(buttons) > 6 else False
+
+            # Abort (Start button, or Ctrl-C): return to start pose, then exit
+            if len(buttons) > ABORT_BUTTON and buttons[ABORT_BUTTON]:
+                aborted = True
+                break
             
             # Handle global reset for all components
             if global_reset:
@@ -526,7 +613,16 @@ def main(*, publish_state: bool = False, state_port: int | None = None, state_fp
             robot.send_action(action)
 
             log_rerun_data(obs, action)
+    except KeyboardInterrupt:
+        print("[MAIN] Ctrl-C received: aborting.")
+        aborted = True
     finally:
+        if aborted:
+            try:
+                return_to_start_pose(robot, left_arm, right_arm, head_control)
+            except Exception as e:
+                print(f"[MAIN] Reset before exit failed: {e}")
+        release_serial_ports(robot)     # 断开前再清一次，避免 disconnect 也被忙标志挡住
         robot.disconnect()
         print("Teleoperation ended.")
 
