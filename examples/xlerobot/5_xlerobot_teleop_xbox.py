@@ -102,7 +102,8 @@ class SimpleHeadControl:
 
 class SimpleTeleopArm:
     def __init__(self, kinematics, joint_map, initial_obs, prefix="left", kp=1, start_pose=None,
-                 gripper_open=100.0, gripper_closed=0.0, gripper_deadzone=0.05):
+                 gripper_open=100.0, gripper_closed=0.0, gripper_deadzone=0.05,
+                 degree_step=2.0, xy_step=0.005):
         self.kinematics = kinematics
         self.joint_map = joint_map
         self.prefix = prefix  # To distinguish left and right arm
@@ -117,8 +118,8 @@ class SimpleTeleopArm:
             "gripper": initial_obs[f"{prefix}_arm_gripper.pos"],
         }
         # Set the degree step and xy step
-        self.degree_step = 2
-        self.xy_step = 0.005
+        self.degree_step = float(degree_step)
+        self.xy_step = float(xy_step)
         configured_pose = start_pose or default_xlerobot_start_pose()
         self.gripper_open = float(gripper_open)
         self.gripper_closed = float(gripper_closed)
@@ -148,20 +149,36 @@ class SimpleTeleopArm:
         action = self.p_control_action(obs)
         robot.send_action(action)
 
+    def _log(self, msg: str) -> None:
+        """连续动作按 5 Hz 打印，避免每个控制周期刷一行。"""
+        now = time.monotonic()
+        if now - getattr(self, "_last_log_t", 0.0) >= 0.2:
+            self._last_log_t = now
+            print(msg)
+
     def handle_keys(self, key_state):
+        # 摇杆偏移量 → 步长缩放；键盘式数字输入没有 gain 时按 1.0 处理
+        gx = key_state.get("gain_x", 1.0)
+        gy = key_state.get("gain_y", 1.0)
+        if gx == 0.0:
+            gx = 1.0 if any(key_state.get(k) for k in
+                            ('shoulder_pan+', 'shoulder_pan-', 'wrist_roll+', 'wrist_roll-')) else 0.0
+        if gy == 0.0:
+            gy = 1.0 if any(key_state.get(k) for k in ('pitch+', 'pitch-')) else 0.0
+
         # Joint increments
         if key_state.get('shoulder_pan+'):
-            self.target_positions["shoulder_pan"] += self.degree_step
-            print(f"[{self.prefix}] shoulder_pan: {self.target_positions['shoulder_pan']}")
+            self.target_positions["shoulder_pan"] += self.degree_step * gx
+            self._log(f"[{self.prefix}] shoulder_pan: {self.target_positions['shoulder_pan']:.1f}")
         if key_state.get('shoulder_pan-'):
-            self.target_positions["shoulder_pan"] -= self.degree_step
-            print(f"[{self.prefix}] shoulder_pan: {self.target_positions['shoulder_pan']}")
+            self.target_positions["shoulder_pan"] -= self.degree_step * gx
+            self._log(f"[{self.prefix}] shoulder_pan: {self.target_positions['shoulder_pan']:.1f}")
         if key_state.get('wrist_roll+'):
-            self.target_positions["wrist_roll"] += self.degree_step
-            print(f"[{self.prefix}] wrist_roll: {self.target_positions['wrist_roll']}")
+            self.target_positions["wrist_roll"] += self.degree_step * gx
+            self._log(f"[{self.prefix}] wrist_roll: {self.target_positions['wrist_roll']:.1f}")
         if key_state.get('wrist_roll-'):
-            self.target_positions["wrist_roll"] -= self.degree_step
-            print(f"[{self.prefix}] wrist_roll: {self.target_positions['wrist_roll']}")
+            self.target_positions["wrist_roll"] -= self.degree_step * gx
+            self._log(f"[{self.prefix}] wrist_roll: {self.target_positions['wrist_roll']:.1f}")
         
         # 夹爪：扳机模拟量 → 张开位(gripper_open) ~ 闭合位(gripper_closed) 的线性映射。
         # 左右方向可能相反，默认值在 CLI/main 里各自独立；如方向不对，
@@ -181,35 +198,34 @@ class SimpleTeleopArm:
             print(f"[{self.prefix}] gripper: {state} (trigger {analog if analog is not None else 0:.2f})")
         
         if key_state.get('pitch+'):
-            self.pitch += self.degree_step
-            print(f"[{self.prefix}] pitch: {self.pitch}")
+            self.pitch += self.degree_step * gy
+            self._log(f"[{self.prefix}] pitch: {self.pitch:.1f}")
         if key_state.get('pitch-'):
-            self.pitch -= self.degree_step
-            print(f"[{self.prefix}] pitch: {self.pitch}")
+            self.pitch -= self.degree_step * gy
+            self._log(f"[{self.prefix}] pitch: {self.pitch:.1f}")
 
-        # XY plane (IK)
+        # XY plane (IK)：按摇杆偏移量缩放
+        sx = self.xy_step * (gx if gx else 1.0)
+        sy = self.xy_step * (gy if gy else 1.0)
         moved = False
         if key_state.get('x+'):
-            self.current_x += self.xy_step
+            self.current_x += sx
             moved = True
-            print(f"[{self.prefix}] x+: {self.current_x:.4f}, y: {self.current_y:.4f}")
         if key_state.get('x-'):
-            self.current_x -= self.xy_step
+            self.current_x -= sx
             moved = True
-            print(f"[{self.prefix}] x-: {self.current_x:.4f}, y: {self.current_y:.4f}")
         if key_state.get('y+'):
-            self.current_y += self.xy_step
+            self.current_y += sy
             moved = True
-            print(f"[{self.prefix}] x: {self.current_x:.4f}, y+: {self.current_y:.4f}")
         if key_state.get('y-'):
-            self.current_y -= self.xy_step
+            self.current_y -= sy
             moved = True
-            print(f"[{self.prefix}] x: {self.current_x:.4f}, y-: {self.current_y:.4f}")
         if moved:
             joint2, joint3 = self.kinematics.inverse_kinematics(self.current_x, self.current_y)
             self.target_positions["shoulder_lift"] = joint2
             self.target_positions["elbow_flex"] = joint3
-            print(f"[{self.prefix}] shoulder_lift: {joint2}, elbow_flex: {joint3}")
+            self._log(f"[{self.prefix}] xy: {self.current_x:.3f}, {self.current_y:.3f} "
+                      f"(shoulder_lift {joint2:.1f}, elbow {joint3:.1f})")
 
         # Wrist flex is always coupled to pitch and the other two
         self.target_positions["wrist_flex"] = (
@@ -228,6 +244,22 @@ class SimpleTeleopArm:
             action[f"{self.joint_map[j]}.pos"] = current[j] + control
         return action
     
+
+def axis_gain(axes, idx: int, deadzone: float = 0.1, expo: float = 0.0) -> float:
+    """摇杆偏移量 → 0~1 的增益（死区外线性，可选 expo 曲线）。
+
+    expo=0 线性；expo>0 时中间段更细腻（轻推慢、推到底仍到 1）。
+    """
+    if len(axes) <= idx:
+        return 0.0
+    v = abs(float(axes[idx]))
+    if v <= deadzone:
+        return 0.0
+    v = min(1.0, (v - deadzone) / max(1e-6, 1.0 - deadzone))
+    if expo > 0:
+        v = v ** (1.0 + 2.0 * expo)
+    return v
+
 
 _TRIGGER_MIN: dict[int, float] = {}   # 每个轴见过的最小值，用来判断量程
 
@@ -315,7 +347,7 @@ def return_to_start_pose(robot, left_arm, right_arm, head_control,
 
 
 # --- XBOX Controller Mapping ---
-def get_xbox_key_state(joystick, keymap):
+def get_xbox_key_state(joystick, keymap, axes_xy=(0, 1), stick_deadzone=0.1, stick_expo=0.0):
     """
     Map XBOX controller state to semantic action booleans using the provided keymap.
     """
@@ -330,8 +362,11 @@ def get_xbox_key_state(joystick, keymap):
     lb_pressed = bool(buttons[4]) if len(buttons) > 4 else False
     rb_pressed = bool(buttons[5]) if len(buttons) > 5 else False
 
-    # Map controller state to semantic actions
-    state = {}
+    # 摇杆增益：0 = 回中，1 = 推到底；handle_keys 用它缩放每帧步长
+    state = {
+        "gain_x": axis_gain(axes, axes_xy[0], stick_deadzone, stick_expo),
+        "gain_y": axis_gain(axes, axes_xy[1], stick_deadzone, stick_expo),
+    }
     for action, control in keymap.items():
         if control == 'left_trigger':
             analog = trigger_value(axes, 2)
@@ -474,7 +509,9 @@ def get_base_speed_control(joystick):
 def main(*, publish_state: bool = False, state_port: int | None = None, state_fps: int | None = None,
          left_gripper_open: float = 0.0, left_gripper_closed: float = 100.0,
          right_gripper_open: float = 0.0, right_gripper_closed: float = 100.0,
-         gripper_deadzone: float = 0.05):
+         gripper_deadzone: float = 0.05,
+         degree_step: float = 2.0, xy_step: float = 0.005, kp: float = 1.0,
+         stick_deadzone: float = 0.1, stick_expo: float = 0.0):
     robot_config = XLerobotConfig()
     robot = XLerobot(robot_config)
     try:
@@ -524,11 +561,13 @@ def main(*, publish_state: bool = False, state_port: int | None = None, state_fp
         kin_left, LEFT_JOINT_MAP, obs, prefix="left", start_pose=robot_config.start_pose,
         gripper_open=left_gripper_open, gripper_closed=left_gripper_closed,
         gripper_deadzone=gripper_deadzone,
+        degree_step=degree_step, xy_step=xy_step, kp=kp,
     )
     right_arm = SimpleTeleopArm(
         kin_right, RIGHT_JOINT_MAP, obs, prefix="right", start_pose=robot_config.start_pose,
         gripper_open=right_gripper_open, gripper_closed=right_gripper_closed,
         gripper_deadzone=gripper_deadzone,
+        degree_step=degree_step, xy_step=xy_step, kp=kp,
     )
     head_control = SimpleHeadControl(obs, start_pose=robot_config.start_pose)
 
@@ -566,8 +605,12 @@ def main(*, publish_state: bool = False, state_port: int | None = None, state_fp
                 aborted = True
                 break
             pygame.event.pump()
-            left_key_state = get_xbox_key_state(joystick, LEFT_KEYMAP)
-            right_key_state = get_xbox_key_state(joystick, RIGHT_KEYMAP)
+            left_key_state = get_xbox_key_state(
+                joystick, LEFT_KEYMAP, axes_xy=(0, 1),
+                stick_deadzone=stick_deadzone, stick_expo=stick_expo)
+            right_key_state = get_xbox_key_state(
+                joystick, RIGHT_KEYMAP, axes_xy=(3, 4),
+                stick_deadzone=stick_deadzone, stick_expo=stick_expo)
             
             # Check for global reset (back button)
             buttons = [joystick.get_button(i) for i in range(joystick.get_numbuttons())]
@@ -644,6 +687,16 @@ if __name__ == "__main__":
                         help="右夹爪闭合位（本机 100 = 夹紧）")
     parser.add_argument("--gripper-deadzone", type=float, default=0.05,
                         help="扳机死区（0~1），避免松开时的噪声导致夹爪抖动")
+    parser.add_argument("--degree-step", type=float, default=2.0,
+                        help="每帧关节增量（度）；越大越快")
+    parser.add_argument("--xy-step", type=float, default=0.005,
+                        help="每帧平面增量（米）；越大越快")
+    parser.add_argument("--kp", type=float, default=1.0,
+                        help="跟随增益：1.0 = 直接打到目标，越小越柔")
+    parser.add_argument("--stick-deadzone", type=float, default=0.1,
+                        help="摇杆死区（0~1），低于此值视为回中")
+    parser.add_argument("--stick-expo", type=float, default=0.0,
+                        help="摇杆曲线：0 = 线性，越大中间越细腻")
     args = parser.parse_args()
     main(publish_state=args.publish_state, state_port=args.state_port, state_fps=args.state_fps,
          left_gripper_open=args.left_gripper_open, left_gripper_closed=args.left_gripper_closed,

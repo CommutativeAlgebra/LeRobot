@@ -207,9 +207,9 @@ class RectangularTrajectory:
         return target_x, target_y
 
 class SimpleHeadControl:
-    def __init__(self, initial_obs, kp=0.81):
+    def __init__(self, initial_obs, kp=0.81, degree_step=1.0):
         self.kp = kp
-        self.degree_step = 1
+        self.degree_step = float(degree_step)
         # Initialize head motor positions
         self.target_positions = {
             "head_motor_1": initial_obs.get("head_motor_1.pos", 0.0),
@@ -247,7 +247,8 @@ class SimpleHeadControl:
         return action
 
 class SimpleTeleopArm:
-    def __init__(self, kinematics, joint_map, initial_obs, prefix="left", kp=0.81):
+    def __init__(self, kinematics, joint_map, initial_obs, prefix="left", kp=0.81,
+                 degree_step=3.0, xy_step=0.0081):
         self.kinematics = kinematics
         self.joint_map = joint_map
         self.prefix = prefix  # To distinguish left and right arm
@@ -266,8 +267,8 @@ class SimpleTeleopArm:
         self.current_y = 0.1131
         self.pitch = 0.0
         # Set the degree step and xy step
-        self.degree_step = 3
-        self.xy_step = 0.0081
+        self.degree_step = float(degree_step)
+        self.xy_step = float(xy_step)
         # Set target positions to zero for P control
         self.target_positions = {
             "shoulder_pan": 0.0,
@@ -488,6 +489,14 @@ def main():
                         help="v30 模式的数据集目录（如 data/serve/local/pick_cube）")
     parser.add_argument("--record-repo-id", default=None,
                         help="v30 模式的 repo_id（默认 local/<目录名>）")
+    parser.add_argument("--degree-step", type=float, default=3.0,
+                        help="每帧关节增量（度）；键盘默认 3，觉得太快就调小")
+    parser.add_argument("--xy-step", type=float, default=0.0081,
+                        help="每帧平面增量（米）；默认 0.0081")
+    parser.add_argument("--head-degree-step", type=float, default=1.0,
+                        help="每帧头部增量（度）")
+    parser.add_argument("--kp", type=float, default=0.81,
+                        help="跟随增益：越大越跟手，越小越柔")
     parser.add_argument("--episode-time-sec", type=int, default=0,
                         help="自动分段间隔（秒）；0 = 不自动切，用空格手动控制。"
                              "注意：>0 时到点会保存当前段并立即开始下一段，不会停止录制")
@@ -551,9 +560,11 @@ def main():
     obs = robot.get_observation()
     kin_left = SO101Kinematics()
     kin_right = SO101Kinematics()
-    left_arm = SimpleTeleopArm(kin_left, LEFT_JOINT_MAP, obs, prefix="left")
-    right_arm = SimpleTeleopArm(kin_right, RIGHT_JOINT_MAP, obs, prefix="right")
-    head_control = SimpleHeadControl(obs)
+    left_arm = SimpleTeleopArm(kin_left, LEFT_JOINT_MAP, obs, prefix="left",
+                               kp=args.kp, degree_step=args.degree_step, xy_step=args.xy_step)
+    right_arm = SimpleTeleopArm(kin_right, RIGHT_JOINT_MAP, obs, prefix="right",
+                                kp=args.kp, degree_step=args.degree_step, xy_step=args.xy_step)
+    head_control = SimpleHeadControl(obs, kp=args.kp, degree_step=args.head_degree_step)
 
     # Move both arms and head to zero position at start
     left_arm.move_to_zero_position(robot)

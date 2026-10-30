@@ -35,6 +35,49 @@ PYTHONPATH=src $P examples/xlerobot/5_xlerobot_teleop_xbox.py --publish-state
 [MAIN] Read-only state stream: http://127.0.0.1:8765  (30 Hz)
 ```
 
+### 灵敏度调节
+
+四个旋钮，都能用命令行改（默认值即原行为）：
+
+| 参数 | 默认 | 作用 | 调大的效果 |
+|---|---|---|---|
+| `--degree-step` | `2.0` | 每帧关节增量（度） | 关节转得更快 |
+| `--xy-step` | `0.005` | 每帧平面增量（米） | 手臂平移更快 |
+| `--kp` | `1.0` | 跟随增益 | 更跟手；调小则更柔、有滞后 |
+| `--stick-deadzone` | `0.1` | 摇杆死区 | 更迟钝、抗漂移 |
+| `--stick-expo` | `0.0` | 摇杆曲线 | 中间段更细腻（推荐 `0.5~1.0`） |
+
+**注意步长与帧率相关**：`degree_step=2` 在 30 Hz 下是 60°/s，在 60 Hz 下就是 120°/s。
+
+**摇杆现在是按偏移量成比例的**（以前是 `>0.5` 二值，推一半就是全速）：
+
+```
+摇杆 0.3 → 增益 0.22     摇杆 0.5 → 增益 0.44
+摇杆 0.75 → 增益 0.72    摇杆 1.0 → 增益 1.00
+```
+
+加 `--stick-expo 1.0` 后中间更细腻：
+
+```
+摇杆 0.3 → 0.01    摇杆 0.5 → 0.09
+摇杆 0.75 → 0.38   摇杆 1.0 → 1.00
+```
+
+**常用组合**
+
+```bash
+# 精细操作（装配、插拔）
+--degree-step 1.0 --xy-step 0.002 --stick-expo 1.0
+
+# 快速搬运
+--degree-step 4.0 --xy-step 0.010 --stick-expo 0
+
+# 跟随偏软（不会一推就冲）
+--kp 0.5 --degree-step 2.0
+```
+
+**底盘速度**不走这些参数，用 LB / RB 切三档（0.1 / 0.2 / 0.3 m/s）。
+
 ### 键位
 
 | 操作 | 机器人动作 |
@@ -134,6 +177,7 @@ PYTHONPATH=src $P examples/xlerobot/4_xlerobot_teleop_keyboard.py --publish-stat
 | 夹爪 | 模拟量，连续 0~100 | **步进**，每帧 ±3，夹在 0~100 |
 | 夹爪单侧方向 | 左右各自配置 | 同一套 `t/g`、`+/-`，方向由按键定义 |
 | 中止 | Start / Ctrl-C | `b` / Ctrl-C |
+| 灵敏度 | `--degree-step/--xy-step/--kp/--stick-*` | `--degree-step/--xy-step/--head-degree-step/--kp` |
 
 ### 录制（两种方式）
 
