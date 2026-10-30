@@ -407,7 +407,7 @@ PYTHONPATH=src $P dsh/probe_gripper.py --motor left_arm_gripper --values 0,50,10
 ### 8.1 环境准备（**尚未执行**）
 
 ```bash
-# 1) 取 transformers 的 fork（GitHub HTTPS 被墙，用 SSH）
+# 1) 取 transformers 的 fork（GitHub HTTPS 时通时不通，SSH 稳定）
 git clone --depth 1 -b fix/lerobot_openpi \
   git@github.com:huggingface/transformers.git ~/src/transformers-openpi
 
@@ -422,12 +422,13 @@ pip install ~/src/transformers-openpi "scipy>=1.10.1,<1.15"
 python -c "from lerobot.policies.pi05 import modeling_pi05 as m; print(m.GemmaForCausalLM is not None)"
 ```
 
-> ⚠️ 不要用 `pip install -e ".[pi]"`——里面的 `git+https` 地址在你这里不通。
+> ⚠️ 不建议用 `pip install -e ".[pi]"`——它的 `git+https` 地址在本机实测会间歇超时，
+> 卡住时很难判断是网络还是构建问题。先 clone 再装更可控。
 
 ### 8.2 训练命令
 
 ```bash
-export HF_ENDPOINT=https://hf-mirror.com     # huggingface.co 不通
+export HF_ENDPOINT=https://hf-mirror.com     # huggingface.co 本体不通（实测超时），走镜像
 
 PYTHONPATH=src python -m lerobot.scripts.lerobot_train \
   --policy.type=pi05 \
@@ -547,7 +548,8 @@ PYTHONPATH=src python -m lerobot.scripts.lerobot_train \
 | `Parquet magic bytes not found` | 进程被强杀，文件未收尾 | 数据不可恢复；已改为每集 finalize |
 | 录制器拒绝开录 | 三路相机不全 | 检查 USB |
 | `transformers` 导入成功但建模失败 | `modeling_pi05` 里 try/except 兜底成 None | 装 fork 后验证 `GemmaForCausalLM is not None` |
-| HF 下载卡住 | huggingface.co 不通 | `export HF_ENDPOINT=https://hf-mirror.com` |
+| HF 下载卡住 | huggingface.co 本体不通（实测超时） | `export HF_ENDPOINT=https://hf-mirror.com` |
+| `git ls-remote` / `pip` 卡住 | GitHub HTTPS 间歇性超时 | 改用 SSH（`git@github.com:...`） |
 
 ---
 
