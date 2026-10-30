@@ -97,7 +97,8 @@ class SimpleHeadControl:
         return action
 
 class SimpleTeleopArm:
-    def __init__(self, kinematics, joint_map, initial_obs, prefix="left", kp=1, start_pose=None):
+    def __init__(self, kinematics, joint_map, initial_obs, prefix="left", kp=1, start_pose=None,
+                 gripper_open=100.0, gripper_closed=0.0, gripper_deadzone=0.05):
         self.kinematics = kinematics
         self.joint_map = joint_map
         self.prefix = prefix  # To distinguish left and right arm
@@ -115,6 +116,10 @@ class SimpleTeleopArm:
         self.degree_step = 2
         self.xy_step = 0.005
         configured_pose = start_pose or default_xlerobot_start_pose()
+        self.gripper_open = float(gripper_open)
+        self.gripper_closed = float(gripper_closed)
+        self.gripper_deadzone = float(gripper_deadzone)
+        self._logged_gripper = None
         self.zero_pos = {joint: configured_pose[motor] for joint, motor in joint_map.items()}
         self.target_positions = self.zero_pos.copy()
         self._reset_kinematic_state()
@@ -154,14 +159,22 @@ class SimpleTeleopArm:
             self.target_positions["wrist_roll"] -= self.degree_step
             print(f"[{self.prefix}] wrist_roll: {self.target_positions['wrist_roll']}")
         
-        # Gripper control with auto-close functionality
-        if key_state.get('gripper+'):
-            # Trigger pressed - open gripper (0.1)
-            self.target_positions["gripper"] = 2
-            print(f"[{self.prefix}] gripper: CLOSED")
+        # 夹爪：扳机模拟量 → 张开位(gripper_open) ~ 闭合位(gripper_closed) 的线性映射。
+        # 左右方向可能相反，默认值在 CLI/main 里各自独立；如方向不对，
+        # 把 --<side>-gripper-open/closed 两个值对调即可。
+        open_pos = self.gripper_open
+        analog = key_state.get("gripper_analog")
+        if analog is None:                       # 手柄读不到扳机时退回"按着就夹"
+            target = self.gripper_closed if key_state.get('gripper+') else open_pos
         else:
-            self.target_positions["gripper"] = self.zero_pos["gripper"]
-            print(f"[{self.prefix}] gripper: auto-opening to {self.target_positions['gripper']:.1f}")
+            dz = min(max(self.gripper_deadzone, 0.0), 0.9)
+            v = 0.0 if analog <= dz else (analog - dz) / (1.0 - dz)
+            target = open_pos + v * (self.gripper_closed - open_pos)
+        self.target_positions["gripper"] = target
+        if self._logged_gripper is None or abs(target - self._logged_gripper) >= 2.0:
+            self._logged_gripper = target
+            state = "CLOSED" if abs(target - self.gripper_closed) < 2.0 else f"{target:.0f}"
+            print(f"[{self.prefix}] gripper: {state} (trigger {analog if analog is not None else 0:.2f})")
         
         if key_state.get('pitch+'):
             self.pitch += self.degree_step
@@ -212,6 +225,28 @@ class SimpleTeleopArm:
         return action
     
 
+_TRIGGER_MIN: dict[int, float] = {}   # 每个轴见过的最小值，用来判断量程
+
+
+def trigger_value(axes, idx: int) -> float:
+    """把扳机轴归一化到 0~1。
+
+    SDL 在不同平台把扳机报成 -1~1（松开 -1）或 0~1（松开 0），光看单帧分不清。
+    这里记住每个轴出现过的最小值：一旦见过负值，就认定是 -1~1 量程。
+    通常开机第一帧都是松开的，所以第一次调用就能判断对。
+    """
+    if len(axes) <= idx:
+        return 0.0
+    value = float(axes[idx])
+    lo = _TRIGGER_MIN.get(idx)
+    if lo is None or value < lo:
+        lo = value
+        _TRIGGER_MIN[idx] = lo
+    if lo < -0.05:                      # 确认是 -1~1 量程
+        value = (value + 1.0) / 2.0
+    return max(0.0, min(1.0, value))
+
+
 # --- XBOX Controller Mapping ---
 def get_xbox_key_state(joystick, keymap):
     """
@@ -232,9 +267,13 @@ def get_xbox_key_state(joystick, keymap):
     state = {}
     for action, control in keymap.items():
         if control == 'left_trigger':
-            state[action] = axes[2] > 0.5 if len(axes) > 2 else False
+            analog = trigger_value(axes, 2)
+            state[action] = analog > 0.5
+            state['gripper_analog'] = analog      # 连续量交给 handle_keys 做映射
         elif control == 'right_trigger':
-            state[action] = axes[5] > 0.5 if len(axes) > 5 else False
+            analog = trigger_value(axes, 5)
+            state[action] = analog > 0.5
+            state['gripper_analog'] = analog
         elif control == 'a':
             state[action] = bool(buttons[0])
         elif control == 'b':
@@ -365,7 +404,10 @@ def get_base_speed_control(joystick):
     return speed_multiplier
 
 
-def main(*, publish_state: bool = False, state_port: int | None = None, state_fps: int | None = None):
+def main(*, publish_state: bool = False, state_port: int | None = None, state_fps: int | None = None,
+         left_gripper_open: float = 0.0, left_gripper_closed: float = 100.0,
+         right_gripper_open: float = 0.0, right_gripper_closed: float = 100.0,
+         gripper_deadzone: float = 0.05):
     robot_config = XLerobotConfig()
     robot = XLerobot(robot_config)
     try:
@@ -412,12 +454,27 @@ def main(*, publish_state: bool = False, state_port: int | None = None, state_fp
     kin_left = SO101Kinematics()
     kin_right = SO101Kinematics()
     left_arm = SimpleTeleopArm(
-        kin_left, LEFT_JOINT_MAP, obs, prefix="left", start_pose=robot_config.start_pose
+        kin_left, LEFT_JOINT_MAP, obs, prefix="left", start_pose=robot_config.start_pose,
+        gripper_open=left_gripper_open, gripper_closed=left_gripper_closed,
+        gripper_deadzone=gripper_deadzone,
     )
     right_arm = SimpleTeleopArm(
-        kin_right, RIGHT_JOINT_MAP, obs, prefix="right", start_pose=robot_config.start_pose
+        kin_right, RIGHT_JOINT_MAP, obs, prefix="right", start_pose=robot_config.start_pose,
+        gripper_open=right_gripper_open, gripper_closed=right_gripper_closed,
+        gripper_deadzone=gripper_deadzone,
     )
     head_control = SimpleHeadControl(obs, start_pose=robot_config.start_pose)
+
+    # 夹爪行程自检（左右方向可能相反，分别检查）
+    for side, opn, cls in (("左", left_gripper_open, left_gripper_closed),
+                           ("右", right_gripper_open, right_gripper_closed)):
+        span = abs(cls - opn)
+        if span < 10:
+            print(f"[WARN] {side}夹爪行程只有 {span:.1f}（张开 {opn:.0f} → 闭合 {cls:.0f}），"
+                  f"按扳机几乎看不到动作。检查 --left-gripper-open/closed 或 "
+                  f"--right-gripper-open/closed。")
+        else:
+            print(f"[MAIN] {side}夹爪：扳机松开 = {opn:.0f}（张开），按到底 = {cls:.0f}（闭合）")
 
     # Move both arms and head to the configured start pose.
     left_arm.move_to_zero_position(robot, obs)
@@ -481,5 +538,18 @@ if __name__ == "__main__":
                         help="serve read-only state on 127.0.0.1 (for raw_recorder.py)")
     parser.add_argument("--state-port", type=int, help="override record_state_port")
     parser.add_argument("--state-fps", type=int, help="override record_state_fps")
+    parser.add_argument("--left-gripper-open", type=float, default=0.0,
+                        help="左夹爪张开位（当前设为 0，可对调试试）")
+    parser.add_argument("--left-gripper-closed", type=float, default=100.0,
+                        help="左夹爪闭合位（当前设为 100，可对调试试）")
+    parser.add_argument("--right-gripper-open", type=float, default=0.0,
+                        help="右夹爪张开位（本机与左相反：0 = 全开）")
+    parser.add_argument("--right-gripper-closed", type=float, default=100.0,
+                        help="右夹爪闭合位（本机 100 = 夹紧）")
+    parser.add_argument("--gripper-deadzone", type=float, default=0.05,
+                        help="扳机死区（0~1），避免松开时的噪声导致夹爪抖动")
     args = parser.parse_args()
-    main(publish_state=args.publish_state, state_port=args.state_port, state_fps=args.state_fps)
+    main(publish_state=args.publish_state, state_port=args.state_port, state_fps=args.state_fps,
+         left_gripper_open=args.left_gripper_open, left_gripper_closed=args.left_gripper_closed,
+         right_gripper_open=args.right_gripper_open, right_gripper_closed=args.right_gripper_closed,
+         gripper_deadzone=args.gripper_deadzone)
