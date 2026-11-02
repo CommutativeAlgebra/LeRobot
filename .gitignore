@@ -7,3 +7,7 @@ src/lerobot/robots/xlerobot/xlerobot_config.json
 # datasets and recorder scratch output
 data/serve
 dsh/out
+
+# local model checkpoints / weights (large files, not tracked)
+models/
+pi0.5/

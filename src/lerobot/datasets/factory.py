@@ -26,6 +26,7 @@ from lerobot.datasets.lerobot_dataset import (
     MultiLeRobotDataset,
 )
 from lerobot.datasets.streaming_dataset import StreamingLeRobotDataset
+from lerobot.datasets.target_overlay import TargetBoxOverlay
 from lerobot.datasets.transforms import ImageTransforms
 from lerobot.utils.constants import ACTION, OBS_PREFIX, REWARD
 
@@ -123,6 +124,15 @@ def make_dataset(cfg: TrainPipelineConfig) -> LeRobotDataset | MultiLeRobotDatas
         logging.info(
             "Multiple datasets were provided. Applied the following index mapping to the provided datasets: "
             f"{pformat(dataset.repo_id_to_index, indent=2)}"
+        )
+
+    # 把 annotation.target_bbox 画到画面上（必须在归一化统计之前？不影响，只改像素）
+    if cfg.dataset.target_overlay.enable:
+        dataset = TargetBoxOverlay(dataset, cfg.dataset.target_overlay)
+        logging.info(
+            f"TargetBoxOverlay 已启用：camera={cfg.dataset.target_overlay.camera}, "
+            f"fill_alpha={cfg.dataset.target_overlay.fill_alpha}, "
+            f"drop_prob={cfg.dataset.target_overlay.drop_prob}"
         )
 
     if cfg.dataset.use_imagenet_stats:
