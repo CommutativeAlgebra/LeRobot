@@ -338,6 +338,110 @@ PYTHONPATH=src $P dsh/probe_gripper.py --motor left_arm_gripper --values 0,50,10
 --degree-step 4.0 --xy-step 0.010 --stick-expo 0
 ```
 
+### 5.8 提交与推送（Git）
+
+**我们有两个远端**
+
+| 远端 | 地址 | 用途 |
+|---|---|---|
+| **`mine`** | `git@github.com:CommutativeAlgebra/LeRobot.git` | ✅ **我们的仓库**，日常推送 |
+| `origin` | `git@github.com:fduTristin/LeRobot.git` | 上游参考，**不要往这里推** |
+
+默认分支是 `main`，功能分支是 `feat/data_recording`。
+
+**认证：本机有两把 SSH key**
+
+| key | 对应账号 |
+|---|---|
+| `~/.ssh/id_rsa` | `fduTristin` |
+| `~/.ssh/id_ed25519_commutative` | **`CommutativeAlgebra`**（推 mine 时用这把） |
+
+验证当前身份：
+
+```bash
+ssh -T git@github.com                                            # Hi fduTristin!
+ssh -i ~/.ssh/id_ed25519_commutative -o IdentitiesOnly=yes -T git@github.com   # Hi CommutativeAlgebra!
+```
+
+---
+
+**方式 A：每次指定 key（立刻可用，无需改配置）**
+
+```bash
+cd ~/xhz/XLeRobot_wmf/LeRobot
+
+export GIT_SSH_COMMAND='ssh -i ~/.ssh/id_ed25519_commutative -o IdentitiesOnly=yes'
+
+git add -A
+git commit -m "feat(xlerobot): 说明这次改了什么"
+git push mine main
+```
+
+**方式 B：配置 SSH 别名（一次性，之后不用带环境变量）**
+
+```bash
+cat >> ~/.ssh/config <<'EOF'
+
+Host github-commutative
+  HostName github.com
+  User git
+  IdentityFile ~/.ssh/id_ed25519_commutative
+  IdentitiesOnly yes
+EOF
+chmod 600 ~/.ssh/config
+
+# 验证
+ssh -T github-commutative        # 期望：Hi CommutativeAlgebra!
+
+# 把 mine 改成别名地址
+cd ~/xhz/XLeRobot_wmf/LeRobot
+git remote set-url mine git@github-commutative:CommutativeAlgebra/LeRobot.git
+```
+
+之后就是普通流程：
+
+```bash
+git add -A && git commit -m "..." && git push mine main
+```
+
+---
+
+**推送前的自检（重要）**
+
+```bash
+# 1. 看改了什么
+git status --short
+git diff --stat
+
+# 2. 确认没有数据文件被跟踪（应该输出为空）
+git ls-files data/ | head
+git ls-files dsh/out/ | head
+
+# 3. 有没有把真实配置文件加进来（应该只有 .example）
+git ls-files | grep xlerobot_config
+```
+
+**这些已经被 `.gitignore` 挡住，但改了 `.gitignore` 之后要复查**：
+
+| 路径 | 为什么不能提交 |
+|---|---|
+| `data/` | 录制数据集（几十 MB 起） |
+| `dsh/out/` | 录制器临时输出 |
+| `outputs/` | 训练产物（checkpoint 很大） |
+| `src/lerobot/robots/xlerobot/xlerobot_config.json` | **真实配置**：标定路径、相机序列号、本机端口 |
+| `__pycache__/` | 编译缓存 |
+
+---
+
+**推送后核对**
+
+```bash
+git log --oneline -3 --decorate
+git ls-remote --heads mine
+```
+
+或直接在网页上看：https://github.com/CommutativeAlgebra/LeRobot
+
 ---
 
 ## 6. 硬件与已知问题
@@ -565,7 +669,8 @@ PYTHONPATH=src python -m lerobot.scripts.lerobot_train \
 
 ## 附：相关链接
 
-- 仓库：`git@github.com:fduTristin/LeRobot.git`（分支 `feat/data_recording`）
+- **我们的仓库**：https://github.com/CommutativeAlgebra/LeRobot （`main` / `feat/data_recording`）
+- 上游参考：`git@github.com:fduTristin/LeRobot.git`
 - LeRobot 文档：https://huggingface.co/docs/lerobot
 - π0.5 开源实现：https://github.com/Physical-Intelligence/openpi
 - Florence-2 文档：https://huggingface.co/docs/transformers/model_doc/florence2
