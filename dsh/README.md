@@ -9,6 +9,8 @@
   并在 `xlerobot.py` / `config_xlerobot.py` / `7_xlerobot_teleop_joycon.py` 中接线。
 - 生成物（数据集、npz、图）放 `dsh/out/`，可随时删除重建。
 - 本目录**未加入 `.gitignore`**；如需跟随仓库提交请照常 `git add`，不想要就自行忽略。
+- **例外**：`dsh/further_work/` 存放项目完成后的探索方案（视觉提示、目标框、底盘接近），
+  已加入 `.gitignore`，**不要提交**。
 
 ## 索引
 

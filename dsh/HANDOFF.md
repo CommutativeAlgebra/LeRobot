@@ -39,8 +39,6 @@
 | 采集工具链（录制/转换/剪枝/自检/诊断） | ✅ 完成 |
 | 夹爪控制（模拟量） | ✅ 完成（2026-10-30） |
 | 键盘遥操 + 中止复位 | ✅ 完成 |
-| 目标框链路（检测 → 选择 → 画框） | ✅ 完成（2026-11-02） |
-| Florence-2-large 权重 | ✅ 本地 `models/`（已 gitignore，1.5 GB） |
 | π0.5 基座权重（`lerobot/pi05_base`，14.5 GB） | ⬜ 未下载 |
 | π0.5 训练 | ⬜ 未开始（环境未装） |
 | 真机推理 / RTC | ⬜ 未开始 |
@@ -145,7 +143,7 @@ print(ds.num_episodes, '集', ds.num_frames, '帧', ds.fps, 'fps')"
 | `robots/xlerobot/xlerobot.py` | 机器人本体 | `motors_connected` 与相机解耦 |
 | `robots/xlerobot/config_xlerobot.py` | 配置 | 起始姿态、相机、发布器参数 |
 | `utils/visualization_utils.py` | Rerun 可视化 | 查看器缺失时自动降级 |
-| `datasets/target_overlay.py` | **读 v3.0 时把目标框画到画面上** | `TargetBoxOverlay`；只改内存像素，不动 mp4 |
+| `datasets/target_overlay.py` | 读 v3.0 时画目标框（实验性，默认关闭） | `TargetBoxOverlay`；需 `annotation.target_bbox` 列 |
 
 ### 工具（`dsh/`）
 
@@ -155,8 +153,6 @@ print(ds.num_episodes, '集', ds.num_frames, '帧', ds.fps, 'fps')"
 | `convert_to_v21.py` | raw → LeRobot v2.1（给 openpi 用） |
 | `prune_v30.py` | 从 v3.0 数据集删除指定 episode（带备份） |
 | `probe_gripper.py` | 测夹爪在 0~100 上的真实行程 |
-| `florence_boxes.py` | 用 Florence-2 零样本出 2D 框（替代人工标注） |
-| `select_target.py` | 多个框里按中心 x 排序选指定那个，数量不足时夹取并播报 |
 | `diag_servos.py` | 只读扫描舵机（电压/温度/位置/力矩） |
 | `selftest_publisher.py` | 无硬件自检发布器（5 个场景） |
 | `state_publisher.py` | 28 行 shim，方便 `dsh/` 内部 import |
@@ -449,61 +445,6 @@ git ls-remote --heads mine
 
 ---
 
-### 5.9 目标框：检测 → 选择 → 画框（2026-11-02 新增）
-
-三段链路，可以只跑其中一段：
-
-```bash
-# ① 出框（零样本，不需要标注数据）
-$P dsh/florence_boxes.py --images a.jpg \
-    --task "<OPEN_VOCABULARY_DETECTION>" --phrase "apple" --out boxes.json
-
-# ② 从多个框里选一个（按中心 x 从左到右）
-$P dsh/select_target.py --in boxes.json --which middle --noun apple
-
-# ③ 训练时把框画进 v3.0 数据（读的时候画，不写回视频）
-lerobot-train ... --dataset.target_overlay.enable=true
-```
-
-**选择器 `--which`**
-
-| 写法 | 含义 |
-|---|---|
-| `middle` / `center` | 中间那个（要求奇数个且 ≥3；偶数个取 `n//2`） |
-| `left` / `right` | 最左 / 最右 |
-| `2nd` / `third` | 从 1 数的序数 |
-| `0 1 2` / `-1 -2` | 0 起下标 / 从右数 |
-
-数量不足时**默认夹取 + 播报**，不报错：
-
-| 输入 | 检测到 | 播报 | 实际抓 |
-|---|---|---|---|
-| `5th apple` | 3 个 | `only 3 apples` | 最后一个 |
-| `middle apple` | 1 个 | `only one apple` | 它本身 |
-| `middle apple` | 2 个 | `only 2 apples` | 右边那个 |
-
-`--on-mismatch error` 可切回"数量不符直接退出 2"，用于离线质检。
-
-**画框模式 `--annotate-for`**
-
-| 用途 | 线宽 | 填充 |
-|---|---|---|
-| 给人看（`human`） | 0.4% 短边 → 640×480 上 2 px | 无 |
-| **给 π0.5 看（`model`）** | **0.8% 短边 → 4 px** | **α=0.20 亮绿** |
-
-细线缩到 224 会被插值抹掉，必须靠填充；颜色用亮绿，别用红色（画在红物体上等于没画）。
-
-**v3.0 标注列**
-
-| 列 | 类型 | 说明 |
-|---|---|---|
-| `annotation.target_bbox` | float32 (4,) | 归一化 `[0,1]` 的 x1,y1,x2,y2 |
-| `annotation.target_valid` | int64 (1,) | 0 = 该帧无可用框（不画） |
-
-`--dataset.target_overlay.camera / fill_alpha / line_ratio / drop_prob` 可调；`drop_prob` 是训练时随机丢框的比例（建议 0.1~0.2），让模型在框丢失时也能干活。
-
----
-
 ## 6. 硬件与已知问题
 
 ### 硬件配置
@@ -661,22 +602,6 @@ PYTHONPATH=src python -m lerobot.scripts.lerobot_train \
 
 `train_expert_only=true` 保住 VLM 的语义知识，避免过拟合到单一工位。
 
-### 视觉提示与目标选择（2026-11-02 补充）
-
-| 论文 | 关键结论 | 对我们的用法 |
-|---|---|---|
-| [VP-VLA](https://arxiv.org/abs/2603.22003) | 把目标框/crosshair **渲染进 RGB**，避免"坐标转文本"的模态错配 | 画框优于 Box token，已按此实现 |
-| [DeicticVLA](https://arxiv.org/abs/2608.28108) | 同类物体歧义必须用**指向性掩码**；纯语言在未见序数/空间表述下骤降（12.5% vs 62.5%）；框线宽取**图像尺寸 1%** | 支撑"框"路线；线宽 0.8%~1% |
-| [Clutter-Robust VLA](https://arxiv.org/abs/2512.22519) | 目标不存在时会**过度抓取**、被杂物干扰 | `target_valid=0` 样本必须存在 |
-| [Conditional Grounding](https://arxiv.org/abs/2609.05376) | 同外观干扰物会让策略失效；所需视觉目标随阶段变化 | 每个 chunk 重新检测一次框 |
-
-四条落地结论：
-
-1. **框进图像 > 框进文本**（模态一致性），文本坐标需要额外学跨模态映射
-2. **训练分两阶段**：先纯语言再联合，否则学不会用框，或把语言能力练没
-3. **遮挡判断用"底边中点 + 面积比"**即可，不需要 SAM 2（SAM 2 只在要像素掩码时值）
-4. **底盘移动时不要重新执行"中间"选择**，只做身份关联（IoU/光流/卡尔曼），否则目标会中途切换
-
 ---
 
 ## 10. 路线图与待办
@@ -691,7 +616,6 @@ PYTHONPATH=src python -m lerobot.scripts.lerobot_train \
 - [x] 中止流程（Start/Ctrl-C → 复位 → 退出），含串口忙标志修复
 - [x] 灵敏度参数化 + 摇杆比例控制
 - [x] 交接文档 + RUNBOOK
-- [x] 目标框链路：`florence_boxes.py` → `select_target.py` → `TargetBoxOverlay`（2026-11-02）
 
 ### 下一步（按优先级）
 
@@ -703,18 +627,7 @@ PYTHONPATH=src python -m lerobot.scripts.lerobot_train \
 | 4 | 冒烟训练（`--steps 100`） | 依赖 3 | 30 分钟 |
 | 5 | 正式训练 + 真机评测 | 依赖 1~4 | 数天 |
 | 6 | RTC 部署 | 依赖 5 | 1 天 |
-| 7 | 写 `dsh/annotate_targets.py`（批量 Florence-2 + 时序跟踪，回填两列） | 依赖 1 | 半天 |
-| 8 | 下载 `lerobot/pi05_base`（14.5 GB，走 hf-mirror） | 网络 | 40 分钟 |
-| 9 | 底盘接近脚本（两跳 + 尺度伺服 + 四条安全闸门） | 无 | 1 天 |
-
-### 中期方向（可选）
-
-| 方向 | 说明 |
-|---|---|
-| 检测辅助 | ✅ 已完成：Florence-2 出框 → 选择 → 读 v3.0 时画进图像 |
-| 3D 定位 | 标定相机 → 平面假设 → 目标 XYZ 进 state |
-| 底盘小范围移动 | 🟡 方案已定：两跳接近 + 尺度伺服；脚本待写（见第 9 节） |
-| 多物体采集 | 提高场景熵，教模型"听指令选目标" |
+| 7 | 下载 `lerobot/pi05_base`（14.5 GB，走 hf-mirror） | 网络 | 40 分钟 |
 
 ---
 
@@ -743,7 +656,6 @@ PYTHONPATH=src python -m lerobot.scripts.lerobot_train \
 |---|---|
 | 2026-10-26 | 发布器 + 录制器 + 转换器；首次真实录制；修相机掉线导致遥操崩溃 |
 | 2026-10-27 | Rerun fail-soft；整理 4 个提交；确认 GitHub 推送权限问题 |
-| 2026-11-02 | `select_target.py`（多框选择 + 夹取播报）；`TargetBoxOverlay`（v3.0 读时画框 + CLI 开关）；`.gitignore` 加 `models/`；本地拉取 Florence-2-large；补视觉提示调研（VP-VLA / DeicticVLA） |
 | 2026-10-30 | 夹爪模拟量控制（0=紧/100=开）；键盘遥操对齐手柄；中止复位；灵敏度参数化；检测/3D/伺服方案调研；本文件重写为团队文档 |
 
 ---
@@ -754,7 +666,4 @@ PYTHONPATH=src python -m lerobot.scripts.lerobot_train \
 - 上游参考：`git@github.com:fduTristin/LeRobot.git`
 - LeRobot 文档：https://huggingface.co/docs/lerobot
 - π0.5 开源实现：https://github.com/Physical-Intelligence/openpi
-- Florence-2 文档：https://huggingface.co/docs/transformers/model_doc/florence2
-- Florence-2 权重：https://huggingface.co/microsoft/Florence-2-large （国内用 https://hf-mirror.com）
 - π0.5 基座权重：https://huggingface.co/lerobot/pi05_base （14.5 GB，F32）
-- 视觉提示：[VP-VLA](https://arxiv.org/abs/2603.22003) · [DeicticVLA](https://arxiv.org/abs/2608.28108)

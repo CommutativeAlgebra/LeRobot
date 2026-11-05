@@ -11,3 +11,6 @@ dsh/out
 # local model checkpoints / weights (large files, not tracked)
 models/
 pi0.5/
+
+# 后续工作（视觉提示/底盘接近等探索方案），不随仓库上传
+dsh/further_work/
