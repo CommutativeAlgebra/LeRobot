@@ -65,6 +65,14 @@ def main():
         help="Stop base if no command received for this long",
     )
     parser.add_argument("--max-loop-freq-hz", type=int, default=30, help="Max host loop frequency")
+    parser.add_argument(
+        "--publish-state",
+        action="store_true",
+        help="同时启动只读 HTTP 状态源（默认 8765），供操作台的 dsh/raw_recorder.py 经 SSH 隧道拉取",
+    )
+    parser.add_argument(
+        "--state-port", type=int, default=8765, help="状态源端口（只绑 127.0.0.1）"
+    )
     args = parser.parse_args()
 
     logging.info("Configuring Xlerobot")
@@ -73,6 +81,15 @@ def main():
 
     logging.info("Connecting Xlerobot")
     robot.connect()
+
+    if args.publish_state:
+        from lerobot.robots.xlerobot.state_publisher import RobotStateStream
+
+        # 2 s 容差：相机偶发慢一帧时不至于让 get_observation 抛异常
+        robot = RobotStateStream(
+            robot, port=args.state_port, max_observation_age_s=2.0
+        ).start()
+        logging.info(f"Read-only state stream: http://127.0.0.1:{robot.port}")
 
     logging.info("Starting HostAgent")
     host_config = XLerobotHostConfig(
@@ -113,7 +130,13 @@ def main():
                 watchdog_active = True
                 robot.stop_base()
 
-            last_observation = robot.get_observation()
+            try:
+                last_observation = robot.get_observation()
+            except Exception as exc:
+                # 相机掉线或状态过期时不要把 host 整个搞崩，跳过这一帧继续发下一步
+                logging.warning("Observation unavailable: %s", exc)
+                time.sleep(1.0 / max(host.max_loop_freq_hz, 1))
+                continue
 
             # Encode ndarrays to base64 strings
             for cam_key, _ in robot.cameras.items():

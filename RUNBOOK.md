@@ -71,6 +71,8 @@ PYTHONPATH=src $P -m lerobot.robots.xlerobot.xlerobot_host \
   --robot-id my_xlerobot_pc --connection-time-s 28800
 ```
 
+> 要在操作台上录制，命令末尾再加 `--publish-state`（见 3.0）。
+
 1. `Press ENTER to restore calibration` → **直接回车**（别按 `c`）
 2. 反复打印 `No command available` + `Stopping the base.` → **正常**，在等客户端
 3. `Ctrl-B` 再按 `D` 脱离（host 继续跑）；回来用 `tmux attach -t robot`
@@ -186,6 +188,62 @@ PYTHONPATH=src $P examples/xlerobot/4_xlerobot_teleop_keyboard.py --publish-stat
 ## 3. 录制
 
 终端 1 起遥操（带 `--publish-state`），终端 2 起录制器。
+
+> 录制器跑在**哪台**，数据就写在**哪台**。
+> 同机录制直接用 3.1/3.2；录制器要放操作台时，先按 **3.0** 打通状态通道。
+
+### 3.0 远程录制（录制器在操作台，走 SSH 隧道）
+
+录制器只从 `127.0.0.1:8765` 拉状态，所以**不用改代码**：用 SSH 把机器人的端口映射到操作台本地即可。
+
+**① 机器人端：起 host 时带 `--publish-state`**
+
+```bash
+PYTHONPATH=src $P -m lerobot.robots.xlerobot.xlerobot_host \
+  --robot-id my_xlerobot_pc --connection-time-s 28800 --publish-state
+```
+
+看到 `Read-only state stream: http://127.0.0.1:8765` 即成功。
+状态源只绑本机，局域网直接访问不到（要的就是这个）。
+
+**② 操作台：开隧道（保持这个窗口不关）**
+
+```bash
+ssh -N -o ServerAliveInterval=30 -L 8765:127.0.0.1:8765 user@10.162.152.173
+```
+
+**③ 操作台：另开一个窗口，先探活再录**
+
+```bash
+$P dsh/raw_recorder.py --probe-only
+# 期望：✅ 已连接：robot_type=xlerobot state=17 action=17 cameras=[...]
+
+$P dsh/raw_recorder.py --format v30 \
+  --v30-out ./data/serve/local/your_task \
+  --repo-id local/your_task --task "你的任务描述" --overwrite
+```
+
+Windows 操作台等价写法（PowerShell）：
+
+```powershell
+ssh -N -L 8765:127.0.0.1:8765 user@10.162.152.173
+conda activate lerobot
+python dsh\raw_recorder.py --probe-only
+python dsh\raw_recorder.py --format v30 --v30-out data\serve\local\your_task `
+  --repo-id local/your_task --task "pick up the cube" --overwrite
+```
+
+| 项 | 说明 |
+|---|---|
+| 端口 | 隧道两端都用默认 `8765`，一般不用改 `--port` |
+| 数据落盘 | **写在运行录制器的那台**（操作台）；机器人端磁盘不占 |
+| 带宽 | 三路 JPEG ≈ 35~40 Mbps，与 ZMQ 遥控同量级；两台都建议 5 GHz 或有线 |
+| 抖动 | 状态年龄超过 `--max-state-age-s`（默认 0.5 s）会被丢弃；隧道卡顿先跑 `--probe-only` 和 `ping` |
+| 同时遥控 | 隧道 + ZMQ 遥控可以并存，但两条流都吃带宽 |
+| 安全性 | 隧道默认只绑操作台 `127.0.0.1`；**不要**改成 `-L 0.0.0.0:8765:...`，那等于把相机画面暴露给整个局域网 |
+| Windows 操作台 | 系统自带 OpenSSH 客户端；PowerShell 里把 `$P` 换成 `python`，探活用 `python dsh\raw_recorder.py --probe-only` |
+
+> 隧道断了会表现为"状态过期"丢帧或录制停止；重连隧道后**重新 `--probe-only`** 再开始录。
 
 ### 3.1 raw 母版（默认，需再转 v2.1）
 
