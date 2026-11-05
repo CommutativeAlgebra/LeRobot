@@ -615,6 +615,8 @@ def main():
 
     aborted = False
     prev_keys: set[str] = set()
+    paused = False
+    h_was_down = False
     try:
         while True:
             if stop_requested["flag"]:
@@ -628,6 +630,27 @@ def main():
                 print(f"[MAIN] Quit key '{quit_key}' pressed: returning to start pose, then exiting.")
                 aborted = True
                 break
+
+            # 暂停键 h（hold）：按下后不再下发任何指令（程序继续运行），再按一次恢复
+            # 用途：开录制器/换物/调整场地时防止误触让机器人动起来
+            h_down = "h" in pressed_keys
+            if h_down and not h_was_down:
+                paused = not paused
+                if paused:
+                    print("[MAIN] Paused：已停止下发指令（按 h 恢复，按 b 中止退出）")
+                    try:
+                        obs = robot.get_observation()
+                        hold = {k: v for k, v in obs.items() if k.endswith(".pos")}
+                        robot.send_action({**hold, "x.vel": 0.0, "y.vel": 0.0, "theta.vel": 0.0})
+                    except Exception as e:
+                        print(f"[MAIN] pause: 保持姿态指令发送失败: {e}")
+                else:
+                    print("[MAIN] Resumed：恢复下发指令")
+            h_was_down = h_down
+
+            if paused:
+                time.sleep(1.0 / FPS)
+                continue
 
             left_key_state = {action: (key in pressed_keys) for action, key in LEFT_KEYMAP.items()}
             right_key_state = {action: (key in pressed_keys) for action, key in RIGHT_KEYMAP.items()}
