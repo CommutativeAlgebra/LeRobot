@@ -234,6 +234,108 @@ PYTHONPATH=src $P examples/xlerobot/4_xlerobot_teleop_keyboard.py \
 
 ---
 
+## 一·附2、另一台电脑遥控（host / client）
+
+机器人和操作台分开时用这套：机器人那台只跑 host，另一台跑遥操客户端。
+两台都要有**同版本**的仓库和环境。
+
+### 架构
+
+```
+机器人电脑                            操作台电脑
+xlerobot_host                         4_/5_/7_xlerobot_teleop_*.py --mode client
+  bind 0.0.0.0:5555   ←── 指令 ──────  connect <机器人IP>:5555
+  bind 0.0.0.0:5556   ── 观测 ──────→  3 路 JPEG + 本体感觉
+```
+
+host 绑定的是 `0.0.0.0`，所以默认就支持远程，不需要改绑定地址。
+
+### ① 机器人电脑：起 host
+
+```bash
+PYTHONPATH=src $P -m lerobot.robots.xlerobot.xlerobot_host \
+  --robot-id my_xlerobot_pc --connection-time-s 28800
+```
+
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `--port-zmq-cmd` | 5555 | 指令端口，两端必须一致 |
+| `--port-zmq-observations` | 5556 | 观测端口，两端必须一致 |
+| `--connection-time-s` | 3600 | host 存活时长（秒），长任务调大 |
+| `--watchdog-timeout-ms` | 500 | 超过就主动停底盘（安全兜底） |
+| `--max-loop-freq-hz` | 30 | 主循环上限 |
+
+启动后：
+
+1. `Press ENTER to restore calibration from file` → **直接回车**（别按 `c`）
+2. 周期打印 `WARNING: No command available` + `Stopping the base.`
+   → **正常**，说明串口通了、标定加载了、正在等客户端；底盘被 watchdog 停住是预期行为
+
+### ② 查机器人 IP（别拿 VPN 地址）
+
+```bash
+hostname -I
+ip -4 addr show | grep inet
+```
+
+`hostname -I` 会把所有地址列出来，**只取局域网网卡那个 IPv4**：
+
+```
+inet 2.0.0.1/24      dev utun7       ← VPN 隧道，别用
+inet 10.162.152.173/17 dev wlp131s0  ← 用这个
+```
+
+### ③ 操作台：先测连通
+
+```bash
+ping -c 3 10.162.152.173
+nc -vz 10.162.152.173 5555
+nc -vz 10.162.152.173 5556
+```
+
+两个端口都通再往下走。
+
+### ④ 操作台：起客户端
+
+```bash
+# 键盘
+PYTHONPATH=src $P examples/xlerobot/4_xlerobot_teleop_keyboard.py \
+  --mode client --remote-ip 10.162.152.173
+
+# 手柄（手柄插在操作台）
+PYTHONPATH=src $P examples/xlerobot/5_xlerobot_teleop_xbox.py \
+  --mode client --remote-ip 10.162.152.173
+
+# Joy-Con
+PYTHONPATH=src $P examples/xlerobot/7_xlerobot_teleop_joycon.py \
+  --mode client --remote-ip 10.162.152.173
+```
+
+连上后 host 端的 `No command available` 停止刷屏，客户端按原键位操作。
+
+### 五个注意事项
+
+| 项 | 说明 |
+|---|---|
+| **手柄位置** | 插在**操作台**，不是机器人那台 |
+| **录制位置** | `--record` 的数据写在**操作台**本地；host 占着两个串口，机器人那台不能再跑 `raw_recorder.py` / `state_publisher.py` |
+| **`--publish-state`** | client 模式无效（状态源只绑 `127.0.0.1:8765`），脚本会打印"已忽略" |
+| **带宽** | 3 路 640×480 JPEG(q90) × 30 Hz ≈ **35~40 Mbps**；优先有线，其次 5 GHz。两个 socket 都是 `CONFLATE=1`，带宽不够只会掉帧，不会积压延迟 |
+| **防火墙** | 机器人端 `sudo ufw allow 5555/tcp`、`sudo ufw allow 5556/tcp` |
+
+### 连不上怎么查
+
+| 现象 | 原因 | 处理 |
+|---|---|---|
+| `ping` 不通，但 `ping 网关` 通 | **校园网 AP 隔离** | 手机热点 / 网线直连 / 两台挂同一 VPN |
+| `nc` 报 refused | 防火墙 | ufw 放行 5555/5556 |
+| 客户端 5 秒连接超时 | IP 错 / 不同网段 / 流量被 VPN 劫持 | 客户端跑 `ip route get <机器人IP>` 看出口网卡 |
+| 连上但没有画面 | 只通了 5555 | 放行 5556 |
+| 画面一顿一顿、车也卡 | 带宽不足 | 机器人端调小 `cam_fps` 或 `cam_width/height` |
+| 画面在、车不动 | 客户端主循环被阻塞（如 Rerun 渲染），超过 500 ms 触发 watchdog | 关掉 Rerun / 降预览帧率 |
+
+---
+
 ## 二、启动录制器（终端 2）
 
 先探活（不录制）：
