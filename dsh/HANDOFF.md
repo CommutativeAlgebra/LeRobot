@@ -143,7 +143,6 @@ print(ds.num_episodes, '集', ds.num_frames, '帧', ds.fps, 'fps')"
 | `robots/xlerobot/xlerobot.py` | 机器人本体 | `motors_connected` 与相机解耦 |
 | `robots/xlerobot/config_xlerobot.py` | 配置 | 起始姿态、相机、发布器参数 |
 | `utils/visualization_utils.py` | Rerun 可视化 | 查看器缺失时自动降级 |
-| `datasets/target_overlay.py` | 读 v3.0 时画目标框（实验性，默认关闭） | `TargetBoxOverlay`；需 `annotation.target_bbox` 列 |
 
 ### 工具（`dsh/`）
 

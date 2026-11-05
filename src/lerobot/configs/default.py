@@ -16,7 +16,6 @@
 
 from dataclasses import dataclass, field
 
-from lerobot.datasets.target_overlay import TargetOverlayConfig
 from lerobot.datasets.transforms import ImageTransformsConfig
 from lerobot.datasets.video_utils import get_safe_default_codec
 
@@ -32,8 +31,6 @@ class DatasetConfig:
     root: str | None = None
     episodes: list[int] | None = None
     image_transforms: ImageTransformsConfig = field(default_factory=ImageTransformsConfig)
-    # 训练时把 annotation.target_bbox 画到画面上（π0.5 + Florence-2 方案用）
-    target_overlay: TargetOverlayConfig = field(default_factory=TargetOverlayConfig)
     revision: str | None = None
     use_imagenet_stats: bool = True
     video_backend: str = field(default_factory=get_safe_default_codec)
