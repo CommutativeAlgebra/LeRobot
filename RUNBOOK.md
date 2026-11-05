@@ -243,7 +243,7 @@ PYTHONPATH=src $P examples/xlerobot/4_xlerobot_teleop_keyboard.py \
 
 ```
 机器人电脑                            操作台电脑
-xlerobot_host                         4_/5_/7_xlerobot_teleop_*.py --mode client
+xlerobot_host                         4_xlerobot_teleop_keyboard.py --mode client
   bind 0.0.0.0:5555   ←── 指令 ──────  connect <机器人IP>:5555
   bind 0.0.0.0:5556   ── 观测 ──────→  3 路 JPEG + 本体感觉
 ```
@@ -279,6 +279,10 @@ nc -vz 10.162.152.173 5555
 | **两端挂同一个 VPN** | 用 VPN 分配地址，例如机器人端 `utun7` 的 `2.0.0.1`，客户端 `--remote-ip 2.0.0.1` | 两端必须在同一 VPN，且 `ping` 通 |
 | 端口转发 / 内网穿透 | 把 5555/5556 暴露到公网 | ⚠️ **不建议**：ZMQ 无认证无加密。要用就走 SSH 隧道 `ssh -L 5555:localhost:5555 -L 5556:localhost:5556 <机器人>`，顺便加密 |
 
+> ⚠️ **目前只有键盘脚本支持 `--mode client`**。`5_xlerobot_teleop_xbox.py` /
+> `7_xlerobot_teleop_joycon.py` 还没有 `--mode` / `--remote-ip` 参数，给它们传会直接报
+> `unrecognized arguments`。手柄/Joy-Con 远程要先把 client 分支补进这两个脚本。
+
 ### ① 机器人电脑：起 host
 
 ```bash
@@ -299,6 +303,54 @@ PYTHONPATH=src $P -m lerobot.robots.xlerobot.xlerobot_host \
 1. `Press ENTER to restore calibration from file` → **直接回车**（别按 `c`）
 2. 周期打印 `WARNING: No command available` + `Stopping the base.`
    → **正常**，说明串口通了、标定加载了、正在等客户端；底盘被 watchdog 停住是预期行为
+
+> host **不会自己让机器人动**。它只是把状态发出去、把指令收进来；只有客户端连上、开始发指令，
+> 机械臂才会回 `start_pose`。所以看到满屏 `No command available` 不是故障，是"待机"。
+
+### ①·附、用 SSH 在机器人那台起 host（推荐）
+
+操作台连着机器人时，不必跑到机器人电脑跟前——SSH 进去起即可。但**别在 SSH 前台直接跑**：
+关窗口 / 断网 / 合盖休眠都会杀掉 host（SIGHUP），机器人立刻失去指令。
+
+**方式 A：tmux（推荐）**
+
+```bash
+ssh user@10.162.152.173
+cd ~/xhz/XLeRobot_wmf/LeRobot
+pkill -f 4_xlerobot_teleop_keyboard.py          # 清掉可能占着串口的残留
+fuser -v /dev/ttyACM0 /dev/ttyACM1              # 没输出 = 串口空闲
+
+tmux new -s robot
+P=~/miniconda3/envs/lerobot/bin/python
+PYTHONPATH=src $P -m lerobot.robots.xlerobot.xlerobot_host \
+  --robot-id my_xlerobot_pc --connection-time-s 28800
+# 见到 restore calibration 提示按回车；Ctrl-B 再按 D 脱离
+```
+
+| 命令 | 作用 |
+|---|---|
+| `tmux new -s robot` | 建会话并进入 |
+| `Ctrl-B` 然后 `D` | 脱离（人走了，host 继续跑） |
+| `tmux ls` | 看有哪些会话 |
+| `tmux attach -t robot` | 接回去看日志 / 按回车 |
+| `tmux kill-session -t robot` | 连里面的 host 一起杀掉 |
+
+**方式 B：nohup（不想装 tmux）**
+
+```bash
+cd ~/xhz/XLeRobot_wmf/LeRobot
+P=~/miniconda3/envs/lerobot/bin/python
+echo "" | nohup env PYTHONPATH=src $P -m lerobot.robots.xlerobot.xlerobot_host \
+  --robot-id my_xlerobot_pc --connection-time-s 28800 \
+  > /tmp/xlerobot_host.log 2>&1 &
+
+tail -f /tmp/xlerobot_host.log     # 看状态
+pkill -f xlerobot_host             # 停掉
+```
+
+> `echo "" |` 是给那句 `input()` 喂一个回车（**不能**用 `< /dev/null`：`input()` 直接 EOFError 崩掉）。
+
+> ⚠️ **同一时刻只能有一个 host**。重复起会抢串口报 `Port is in use`，先 `pgrep -af xlerobot_host` 确认。
 
 ### ② 查机器人 IP（别拿 VPN 地址）
 
@@ -326,29 +378,65 @@ nc -vz 10.162.152.173 5556
 
 ### ④ 操作台：起客户端
 
+连上后 host 端的 `No command available` 停止刷屏，客户端按原键位操作。
+
+**Linux 操作台**
+
 ```bash
-# 键盘
+cd <仓库目录>
+P=~/miniconda3/envs/lerobot/bin/python
 PYTHONPATH=src $P examples/xlerobot/4_xlerobot_teleop_keyboard.py \
-  --mode client --remote-ip 10.162.152.173
-
-# 手柄（手柄插在操作台）
-PYTHONPATH=src $P examples/xlerobot/5_xlerobot_teleop_xbox.py \
-  --mode client --remote-ip 10.162.152.173
-
-# Joy-Con
-PYTHONPATH=src $P examples/xlerobot/7_xlerobot_teleop_joycon.py \
   --mode client --remote-ip 10.162.152.173
 ```
 
-连上后 host 端的 `No command available` 停止刷屏，客户端按原键位操作。
+**Windows 操作台**（一次性装环境）
 
-### 五个注意事项
+```powershell
+conda create -y -n lerobot python=3.10
+conda activate lerobot
+cd C:\Users\13402\Desktop\FDUROP\LeRobot
+pip install -e ".[feetech]"
+pip install pyzmq pygame        # 基础依赖里没有这两个，client 需要 zmq
+```
+
+> 国内慢就加 `-i https://pypi.tuna.tsinghua.edu.cn/simple`；torch 会装 CPU 版，约 216 MB。
+
+之后每次遥控：
+
+```powershell
+conda activate lerobot
+cd C:\Users\13402\Desktop\FDUROP\LeRobot
+python examples\xlerobot\4_xlerobot_teleop_keyboard.py --mode client --remote-ip 10.162.152.173
+```
+
+> 🔴 **必须先 `conda activate lerobot`**。rerun 查看器在 `envs\lerobot\Scripts\rerun.exe`，
+> 不在 PATH 里就只会打印 `Rerun viewer unavailable ... Visualization disabled`：
+> 遥控**仍能正常用**，但三路相机画面看不到。激活后查看器正常弹出。
+
+> 客户端**不需要**串口、标定文件、本机相机——状态和画面全部从 host 那台经 ZMQ 过来。
+> 所以操作台上 `COM*` / `/dev/ttyACM*` 是什么都没有也不影响。
+
+> ⚠️ **Windows 操作台上不要放 `src/lerobot/robots/xlerobot/xlerobot_config.json`**。
+> 那个覆盖文件由 host 和 client **共用**，而 `XLerobotClientConfig` 没有 `port1/port2` 字段，
+> 写了会报 `unknown field(s)`；`calibration_dir` 写成字符串还会在 client 侧报
+> `'str' object has no attribute 'mkdir'`（client 配置里该字段默认 None，不会被转成 Path）。
+> 本地模式（机器人直连本机）时才需要这个文件。
+
+> `connect_timeout_s` 只有 **5 秒**：host 还没完全起来时连会报
+> `Timeout waiting for LeKiwi Host to connect expired`，隔几秒重跑一次即可。
+
+启动后先看到 `[left]/[right] Moving to Zero Position` —— **这时手臂就会动**（回 `start_pose`），
+确认周围清空再继续。
+
+### 注意事项
 
 | 项 | 说明 |
 |---|---|
 | **手柄位置** | 插在**操作台**，不是机器人那台 |
 | **录制位置** | `--record` 的数据写在**操作台**本地；host 占着两个串口，机器人那台不能再跑 `raw_recorder.py` / `state_publisher.py` |
 | **`--publish-state`** | client 模式无效（状态源只绑 `127.0.0.1:8765`），脚本会打印"已忽略" |
+| **全局键盘钩子** | 客户端用的是 pynput **全局**监听：遥控期间在**任何窗口**敲 `i/j/k/l/w/a/s/d` 都会被当成机器人指令。别切去打字，也别忘了 `b` 是中止 |
+| **host 别被顺手关掉** | host 跑在 SSH 前台时，关窗口 / 断网 / 合盖都会杀掉它 → 客户端立刻 `Timeout`。用 tmux 或 nohup（见 ①·附） |
 | **带宽** | 3 路 640×480 JPEG(q90) × 30 Hz ≈ **35~40 Mbps**；优先有线，其次 5 GHz。两个 socket 都是 `CONFLATE=1`，带宽不够只会掉帧，不会积压延迟 |
 | **防火墙** | 机器人端 `sudo ufw allow 5555/tcp`、`sudo ufw allow 5556/tcp` |
 
@@ -362,6 +450,30 @@ PYTHONPATH=src $P examples/xlerobot/7_xlerobot_teleop_joycon.py \
 | 连上但没有画面 | 只通了 5555 | 放行 5556 |
 | 画面一顿一顿、车也卡 | 带宽不足 | 机器人端调小 `cam_fps` 或 `cam_width/height` |
 | 画面在、车不动 | 客户端主循环被阻塞（如 Rerun 渲染），超过 500 ms 触发 watchdog | 关掉 Rerun / 降预览帧率 |
+| 客户端报 `Timeout waiting for LeKiwi Host to connect expired` | host 没在跑（被 Ctrl-C / 关窗口 / 串口被别的进程占着） | 机器人端 `pgrep -af xlerobot_host`、`fuser -v /dev/ttyACM0 /dev/ttyACM1`；按 ①·附 重起 host |
+| host 起来了但一直刷 `No command available` | **不是故障**，host 在等客户端 | 起客户端即可 |
+| SSH 里跑 `4_...keyboard.py` 报 `KeyboardTeleop is not connected` | SSH 没有 `DISPLAY`，pynput 被主动跳过 | 键盘遥操只能在有图形界面的机器上跑；远程请用 client 模式 |
+| Windows 客户端报 `Rerun viewer unavailable` | 没 `conda activate lerobot` | 激活环境重跑；不影响遥控，只是没画面 |
+| `[TxRxResult] Port is in use!` | 有另一个进程占着 `/dev/ttyACM*` | `pkill -f 4_xlerobot_teleop_keyboard.py`、`fuser -v /dev/ttyACM*`，只留一个 host |
+
+### 键盘脚本为什么不能在 SSH 里跑
+
+`teleop_keyboard.py` 开头有这段判断：
+
+```python
+if ("DISPLAY" not in os.environ) and ("linux" in sys.platform):
+    raise ImportError("pynput blocked intentionally due to no display.")
+```
+
+SSH 会话没有 `DISPLAY` → pynput 根本不导入 → `connect()` 什么都不做、`listener=None`
+→ 第一次 `get_action()` 就抛 `DeviceNotConnectedError: KeyboardTeleop is not connected`，
+`finally` 里的 `keyboard.disconnect()` 还会再抛一次（次生错误，可忽略）。
+
+所以两个正确姿势只有：
+
+1. **远程**：操作台上跑 `--mode client`（键盘插在操作台）；
+2. **本地**：坐在机器人那台的物理显示器前，在它自己的桌面终端里跑（`ssh -X` 不行，
+   pynput 抓的是 X server 那边的键，你本地按的传不过去）。
 
 ---
 
