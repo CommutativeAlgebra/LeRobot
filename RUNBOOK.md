@@ -1,6 +1,6 @@
 # XLeRobot 操作手册
 
-一条链：**遥控 → 录制（raw / v3.0）→ 转 v2.1**。
+一条链：**遥控 → 录制（v3.0，可直接训练）**。raw + 转 v2.1 也保留，需要时用第 4 节。
 
 | 角色 | 机器 | 地址 |
 |---|---|---|
@@ -265,7 +265,7 @@ python dsh\raw_recorder.py --format v30 --v30-out data\serve\local\your_task `
 
 > 隧道断了会表现为"状态过期"丢帧或录制停止；重连隧道后**重新 `--probe-only`** 再开始录。
 
-### 3.1 raw 母版（默认，需再转 v2.1）
+### 3.1 raw 母版（可选，需再转 v2.1）
 
 先探活：
 
@@ -285,7 +285,7 @@ $P dsh/raw_recorder.py \
 
 输出：`dsh/out/raw/<时间戳>/ep_000001/{meta.json, samples.npz, imgs/}`
 
-### 3.2 直接写 LeRobot v3.0（可直训，不用转换）
+### 3.2 直接写 LeRobot v3.0（本项目用这个，可直训，不用转换）
 
 ```bash
 $P dsh/raw_recorder.py \
@@ -405,7 +405,7 @@ $P dsh/raw_recorder.py --format v30 --v30-out data/serve/local/pick_cube \
 
 ---
 
-## 4. 转 v2.1
+## 4. 转 v2.1（可选，本项目默认直接用 v3.0）
 
 ```bash
 $P dsh/convert_to_v21.py \
