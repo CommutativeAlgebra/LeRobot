@@ -313,6 +313,77 @@ $P dsh/raw_recorder.py \
 
 ---
 
+### 3.5 一次完整采集：遥控和录制同时开
+
+采集时两个进程必须**同时在线**——遥控产生动作，录制器在另一端拉状态和**实际下发的 action**。
+**先起录制器、再动**，否则开头会丢。
+
+#### 远程采集（操作台遥控）
+
+| 位置 | 窗口 | 跑什么 |
+|---|---|---|
+| 机器人端 | tmux | `xlerobot_host ... --publish-state` |
+| 操作台 | 窗口 1 | SSH 隧道（8765） |
+| 操作台 | 窗口 2 | 遥操客户端 `--mode client` |
+| 操作台 | 窗口 3 | `dsh/raw_recorder.py` |
+
+```bash
+# 机器人端（tmux 里，先起）
+P=~/miniconda3/envs/lerobot/bin/python
+PYTHONPATH=src $P -m lerobot.robots.xlerobot.xlerobot_host \
+  --robot-id my_xlerobot_pc --connection-time-s 28800 --publish-state
+
+# 操作台·窗口 1：隧道（全程别关）
+ssh -N -o ServerAliveInterval=30 -L 8765:127.0.0.1:8765 user@10.162.152.173
+
+# 操作台·窗口 2：遥控
+conda activate lerobot
+python examples\xlerobot\4_xlerobot_teleop_keyboard.py --mode client --remote-ip 10.162.152.173
+
+# 操作台·窗口 3：录制（先探活再录）
+python dsh\raw_recorder.py --probe-only
+python dsh\raw_recorder.py --format v30 --v30-out data\serve\local\pick_cube `
+  --repo-id local/pick_cube --task "pick up the cube"
+```
+
+#### 本地采集（一台机器，推荐用手柄）
+
+```bash
+# 终端 1：手柄遥控 + 状态源
+PYTHONPATH=src $P examples/xlerobot/5_xlerobot_teleop_xbox.py --publish-state
+
+# 终端 2：录制
+$P dsh/raw_recorder.py --format v30 --v30-out data/serve/local/pick_cube \
+  --repo-id local/pick_cube --task "pick up the cube"
+```
+
+#### ⚠️ 键盘冲突（远程 + 键盘遥控必看）
+
+录制器用 `o` 开始/结束一段，而键盘遥控里 **`o` = `rotate_right`**；pynput 是**全局监听**，
+所以你在录制器窗口按 `o`，机器人的底盘也会同时右转一下。
+
+三个解法，按推荐度：
+
+1. **改用手柄遥控**（键盘整块空出来给录制器）——本地采集首选
+2. **录制器放机器人端**，用**手机 SSH** 去按 `o`/`q`，按键不经过操作台的全局监听
+3. 把录制快捷键做成可配置（`--key-start` 等），换成不与遥操冲突的键
+
+#### 录制节奏
+
+1. 录制器起来 → 按 `o` 开始第一段
+2. 遥控做动作
+3. 按 `o` 结束并存盘（≥15 帧才保留）
+4. 重复 2~3
+5. 按 `q` **正常退出**（v3.0 必须，否则 parquet footer 写不出去）
+
+#### 收尾顺序（别反过来）
+
+录制器 `q` → 遥控 `b`/`Ctrl-C` 复位 → 隧道 `Ctrl-C` → host `Ctrl-C`
+
+反过来会丢最后一段：录制器还没保存时遥控先退，动作流就断了。
+
+---
+
 ## 4. 转 v2.1
 
 ```bash
