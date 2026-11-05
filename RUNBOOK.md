@@ -7,6 +7,9 @@
 | 机器人 | Ubuntu 桌面机 `teai-g1` | `user@10.162.152.173` |
 | 操作台 | Windows | 本机 |
 
+> 文中 `user@10.162.152.173` 是当前这套机器人；换机器时替换成你的地址。
+> `<你的LeRobot目录>` 这类尖括号是占位符，换成自己机器上的实际路径。
+
 ---
 
 ## 0. 准备（一次性）
@@ -42,10 +45,12 @@ P=~/miniconda3/envs/lerobot/bin/python
 ```powershell
 conda create -y -n lerobot python=3.10
 conda activate lerobot
-cd C:\Users\13402\Desktop\FDUROP\LeRobot
+cd <你的LeRobot目录>
 pip install -e ".[feetech]"
 pip install pyzmq pygame      # client 需要 zmq
 ```
+
+> `<你的LeRobot目录>` = 你 clone 仓库的位置，换成自己的即可（如 `D:\code\LeRobot`）。
 
 ### 0.4 自检
 
@@ -81,7 +86,7 @@ PYTHONPATH=src $P -m lerobot.robots.xlerobot.xlerobot_host \
 
 ```powershell
 conda activate lerobot
-cd C:\Users\13402\Desktop\FDUROP\LeRobot
+cd <你的LeRobot目录>
 python examples\xlerobot\4_xlerobot_teleop_keyboard.py --mode client --remote-ip 10.162.152.173
 ```
 

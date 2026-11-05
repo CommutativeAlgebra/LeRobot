@@ -161,6 +161,7 @@ print(ds.num_episodes, '集', ds.num_frames, '帧', ds.fps, 'fps')"
 | 文件 | 内容 |
 |---|---|
 | `RUNBOOK.md` | **操作手册**：键位、命令、已知问题、FAQ |
+| `MY_RUNBOOK.md` | 本机专用副本：由 `RUNBOOK.md` 复制、占位符换成实机路径/IP；**已在 `.gitignore` 中排除，不入库** |
 | `dsh/raw_format.md` | raw 层的字段与目录结构 |
 | `dsh/model_contract.md` | π0.5 的输入输出契约 |
 | `dsh/pipeline.md` | 数据流设计说明 |
