@@ -247,6 +247,7 @@ Windows 操作台等价写法（PowerShell）：
 ```powershell
 ssh -N -L 8765:127.0.0.1:8765 user@10.162.152.173
 conda activate lerobot
+cd <你的LeRobot目录>
 python dsh\raw_recorder.py --probe-only
 python dsh\raw_recorder.py --format v30 --v30-out data\serve\local\your_task `
   --repo-id local/your_task --task "pick up the cube" --overwrite
@@ -350,21 +351,29 @@ ssh -N -o ServerAliveInterval=30 -L 8765:127.0.0.1:8765 user@10.162.152.173
 
 # 操作台·窗口 2：遥控
 conda activate lerobot
+cd <你的LeRobot目录>
 python examples\xlerobot\4_xlerobot_teleop_keyboard.py --mode client --remote-ip 10.162.152.173
 
 # 操作台·窗口 3：录制（先探活再录）
+conda activate lerobot
+cd <你的LeRobot目录>
 python dsh\raw_recorder.py --probe-only
 python dsh\raw_recorder.py --format v30 --v30-out data\serve\local\pick_cube `
   --repo-id local/pick_cube --task "pick up the cube"
 ```
 
+> 每个 PowerShell 窗口都是**独立**的工作目录和环境，所以窗口 2、3 都要各自
+> `conda activate` + `cd`，不能指望继承上一个窗口。
+
 #### 本地采集（一台机器，推荐用手柄）
 
 ```bash
 # 终端 1：手柄遥控 + 状态源
+cd ~/xhz/XLeRobot_wmf/LeRobot
 PYTHONPATH=src $P examples/xlerobot/5_xlerobot_teleop_xbox.py --publish-state
 
 # 终端 2：录制
+cd ~/xhz/XLeRobot_wmf/LeRobot
 $P dsh/raw_recorder.py --format v30 --v30-out data/serve/local/pick_cube \
   --repo-id local/pick_cube --task "pick up the cube"
 ```
